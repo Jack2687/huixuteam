@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { requestID } from "../lib/request-id";
 import { computed, ref } from "vue";
 import Modal from "./Modal.vue";
 import Icon from "./Icon.vue";
@@ -15,7 +16,7 @@ const tab = ref("single"),
   busy = ref(false),
   error = ref(""),
   fileName = ref("");
-let idempotency = crypto.randomUUID(),
+let idempotency = requestID(),
   lastBody = "";
 const parsed = computed(() => {
   try {
@@ -67,7 +68,7 @@ async function submit() {
         : parsed.value.accounts;
     const body = JSON.stringify({ authorized: true, accounts });
     if (body !== lastBody) {
-      idempotency = crypto.randomUUID();
+      idempotency = requestID();
       lastBody = body;
     }
     const data = await api<{ ids: string[] }>("/api/refunds", {

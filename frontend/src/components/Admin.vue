@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onUnmounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
+import { requestID } from "../lib/request-id";
 import AdminAnnouncements from "./AdminAnnouncements.vue";
 import AdminAccountReports from "./AdminAccountReports.vue";
 import Modal from "./Modal.vue";
@@ -136,7 +137,7 @@ const capabilities = [
 ];
 let abort: AbortController | undefined,
   searchTimer: ReturnType<typeof setTimeout>,
-  creditKey = crypto.randomUUID(),
+  creditKey = requestID(),
   creditBody = "";
 async function load() {
   abort?.abort();
@@ -221,7 +222,7 @@ function open(mode: string, user?: User) {
   creditDirection.value = 1;
   creditAmount.value = 100;
   generated.value = [];
-  creditKey = crypto.randomUUID();
+  creditKey = requestID();
   creditBody = "";
 }
 function close() {
@@ -269,7 +270,7 @@ async function save() {
         note: note.value,
       });
       if (creditBody !== body) {
-        creditKey = crypto.randomUUID();
+        creditKey = requestID();
         creditBody = body;
       }
       await api(`/api/admin/users/${target.value?.id}/credit`, {
