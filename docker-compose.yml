@@ -1,0 +1,35 @@
+name: llm-refund
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-18740}:18740"
+    environment:
+      DATABASE_URL: postgres://llm_refund:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/llm_refund?sslmode=disable
+      MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY}
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:?Set BOOTSTRAP_EMAIL}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD}
+      BOOTSTRAP_NAME: ${BOOTSTRAP_NAME:-Admin}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      LISTEN_HOST: 0.0.0.0
+      PORT: 18740
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: llm_refund
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: llm_refund
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_refund -d llm_refund"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  postgres_data:

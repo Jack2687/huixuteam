@@ -1,0 +1,17 @@
+{
+  "name": "llm-refund-ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "check": "vue-tsc --noEmit",
+    "test": "node --experimental-strip-types --test src/lib/import.test.ts"
+  },
+  "dependencies": { "vue": "^3.5.13", "lucide-vue-next": "^0.468.0" },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1", "vite": "^6.0.5", "typescript": "~5.7.3",
+    "vue-tsc": "^2.2.0", "tailwindcss": "^3.4.17", "postcss": "^8.4.49", "autoprefixer": "^10.4.20"
+  }
+}

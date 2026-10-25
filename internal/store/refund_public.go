@@ -1,0 +1,56 @@
+package store
+
+import (
+	"net/mail"
+	"strconv"
+	"strings"
+)
+
+// Public messages are an allowlist, never a pass-through of worker/upstream logs.
+// This also protects historical rows written before the private event split.
+func publicProgress(message string) bool {
+	switch message {
+	case "申请已受理", "开始处理", "处理时间延长，正在继续", "退款服务已完成", "正在继续处理", "申请需要跟进，请联系服务专员。", "本次服务未完成，冻结服务费已释放。", "申请已取消，冻结积分已释放。":
+		return true
+	default:
+		return false
+	}
+}
+func publicRefundMessage(status, message string) string {
+	if publicProgress(message) {
+		return message
+	}
+	switch status {
+	case "queued":
+		return "申请已受理"
+	case "processing", "verifying":
+		return "开始处理"
+	case "succeeded":
+		return "退款服务已完成"
+	case "cancelled":
+		return "申请已取消，冻结积分已释放。"
+	case "failed", "banned":
+		return "本次服务未完成，冻结服务费已释放。"
+	default:
+		return "申请需要跟进，请联系服务专员。"
+	}
+}
+
+func publicNotification(message string) string {
+	if message == "兑换成功，积分已存入可用余额。" || publicProgress(message) {
+		return message
+	}
+	const prefix, suffix = "已受理 ", " 笔退款申请，等待处理。"
+	if strings.HasPrefix(message, prefix) && strings.HasSuffix(message, suffix) {
+		count := strings.TrimSuffix(strings.TrimPrefix(message, prefix), suffix)
+		if n, err := strconv.Atoi(count); err == nil && n > 0 && n <= 100 {
+			return prefix + strconv.Itoa(n) + suffix
+		}
+	}
+	if email, progress, ok := strings.Cut(message, "："); ok && publicProgress(progress) {
+		if addr, err := mail.ParseAddress(email); err == nil && addr.Address == email {
+			return message
+		}
+	}
+	return "申请状态已更新，请查看申请详情。"
+}

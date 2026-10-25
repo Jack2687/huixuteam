@@ -1,0 +1,64 @@
+name: huixuteam
+services:
+  app:
+    container_name: huixuteam-app
+    image: huixuteam-app:${HUIXU_VERSION:-local}
+    build:
+      context: .
+      args:
+        VCS_REF: ${HUIXU_VERSION:-local}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${HUIXU_BIND:-0.0.0.0}:7825:18740"
+    environment:
+      DATABASE_URL: postgres://huixu:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/huixu?sslmode=disable
+      MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY}
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:?Set BOOTSTRAP_EMAIL}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD}
+      BOOTSTRAP_NAME: ${BOOTSTRAP_NAME:-Admin}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LISTEN_HOST: 0.0.0.0
+      PORT: 18740
+      TZ: Asia/Shanghai
+      PYTHONUTF8: 1
+      PYTHONIOENCODING: utf-8
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  postgres:
+    container_name: huixuteam-postgres
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: huixu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: huixu
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U huixu -d huixu"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  postgres_data:
+    name: huixuteam_postgres_data
+networks:
+  default:
+    name: huixuteam_default

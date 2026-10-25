@@ -1,0 +1,157 @@
+<script setup lang="ts">
+import { onMounted, ref, watch } from "vue";
+import { api, statuses } from "../lib/api";
+import ResourceCheckSummary from "./ResourceCheckSummary.vue";
+import type { ResourceCheck } from "../lib/resource-check";
+import Modal from "./Modal.vue";
+import RefundDetail from "./RefundDetail.vue";
+type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
+type Mother = { check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
+type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
+type Settings = { enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string };
+const emit=defineEmits<{toast:[message:string]}>();
+const settings=ref<Settings>({enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:""});
+const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
+const mother=ref<Mother>({id:"",name:"",email:"",team_id:"",proxy_id:"",seat_type:"default",enabled:true,has_secret:false,access_token:""});
+const proxy=ref<ProxyRow>({id:"",name:"",url:"",enabled:true,has_secret:false});
+const removing=ref<{kind:string;id:string;name:string}>();
+const motherCheck=ref<ResourceCheck>(),proxyCheck=ref<ResourceCheck>();
+const motherPreview=ref<CredentialPreview>(),parsing=ref(false),fileInput=ref<HTMLInputElement>();
+watch(()=>mother.value.session,()=>{motherPreview.value=undefined});
+watch(()=>[mother.value.session,mother.value.access_token,mother.value.team_id,mother.value.email,mother.value.proxy_id],()=>{motherCheck.value=undefined});
+watch(()=>proxy.value.url,()=>{proxyCheck.value=undefined});
+const motherInput=()=>{const {check,...value}=mother.value;return value};
+const proxyInput=()=>{const {check,...value}=proxy.value;return value};
+const displayTime=(value:string)=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
+async function load(){
+ busy.value=true;error.value="";
+ try{const d=await api<{settings:Settings;mothers:Mother[];proxies:ProxyRow[]}>("/api/admin/refund-settings");settings.value=d.settings;mothers.value=d.mothers;proxies.value=d.proxies}
+ catch(e){error.value=(e as Error).message}finally{busy.value=false}
+}
+async function saveSettings(){
+ busy.value=true;error.value="";
+ try{await api("/api/admin/refund-settings",{method:"PUT",body:JSON.stringify(settings.value)});emit("toast","执行设置已保存");await load()}
+ catch(e){error.value=(e as Error).message}finally{busy.value=false}
+}
+function editMother(row?:Mother){
+ mother.value=row?{...row,access_token:"",session:"",refresh_token:""}:{id:"",name:"",email:"",team_id:"",proxy_id:proxies.value.find(p=>p.enabled)?.id||"",seat_type:"default",enabled:true,has_secret:false,access_token:"",session:"",refresh_token:""};
+ motherPreview.value=undefined;motherCheck.value=undefined;
+ formError.value="";modal.value="mother";
+}
+function editProxy(row?:ProxyRow){proxyCheck.value=undefined;proxy.value=row?{...row,url:""}:{id:"",name:"",url:"",enabled:true,has_secret:false};formError.value="";modal.value="proxy"}
+function close(){modal.value="";motherCheck.value=undefined;proxyCheck.value=undefined;mother.value.access_token="";mother.value.session="";mother.value.refresh_token="";motherPreview.value=undefined;proxy.value.url="";removing.value=undefined}
+async function parseMother(){
+ const raw=mother.value.session?.trim()||"";
+ if(!raw){formError.value="请粘贴 Session JSON 或 Access Token";return false}
+ parsing.value=true;formError.value="";
+ try{
+  const preview=await api<CredentialPreview>("/api/admin/refund-mothers/preview",{method:"POST",body:JSON.stringify({session:raw})});
+  if(raw!==mother.value.session?.trim())return false;
+  motherPreview.value=preview;
+  if(preview.email)mother.value.email=preview.email;
+  if(preview.team_id)mother.value.team_id=preview.team_id;
+  return true;
+ }catch(e){formError.value=(e as Error).message;motherPreview.value=undefined;return false}finally{parsing.value=false}
+}
+async function importMother(event:Event){
+ const input=event.target as HTMLInputElement,file=input.files?.[0];input.value="";
+ if(!file)return;
+ if(file.size>131072){formError.value="JSON 文件不能超过 128 KB";return}
+ try{mother.value.session=await file.text();await parseMother()}catch{formError.value="读取 JSON 文件失败"}
+}
+async function checkMother(row?:Mother){
+ busy.value=true;formError.value="";error.value="";
+ try{
+  if(!row&&mother.value.session?.trim()&&!await parseMother())return;
+  const result=await api<ResourceCheck>("/api/admin/refund-mothers/check",{method:"POST",body:JSON.stringify(row?{id:row.id}:motherInput())});
+  if(row){row.check=result}else{motherCheck.value=result}
+  if(result.valid)emit("toast",`${result.message} · ${result.latency_ms} ms`);
+  else if(row)error.value=result.message;else formError.value=result.message;
+ }catch(e){if(row)error.value=(e as Error).message;else formError.value=(e as Error).message}finally{busy.value=false}
+}
+async function checkProxy(row?:ProxyRow){
+ busy.value=true;formError.value="";error.value="";
+ try{
+  const result=await api<ResourceCheck>("/api/admin/refund-proxies/check",{method:"POST",body:JSON.stringify(row?{id:row.id}:proxyInput())});
+  if(row){row.check=result}else{proxyCheck.value=result}
+  if(result.valid)emit("toast",`${result.message} · ${result.latency_ms} ms`);
+  else if(row)error.value=result.message;else formError.value=result.message;
+ }catch(e){if(row)error.value=(e as Error).message;else formError.value=(e as Error).message}finally{busy.value=false}
+}
+async function save(){
+ busy.value=true;formError.value="";
+ try{
+  if(!removing.value&&modal.value==="mother"&&mother.value.session?.trim()&&!await parseMother())return;
+  if(removing.value){await api(`/api/admin/refund-${removing.value.kind}/${removing.value.id}`,{method:"DELETE"})}
+  else{await api(`/api/admin/refund-${modal.value==="mother"?"mothers":"proxies"}`,{method:"POST",body:JSON.stringify(modal.value==="mother"?motherInput():proxyInput())})}
+  close();await load();emit("toast","配置已更新");
+ }catch(e){formError.value=(e as Error).message}finally{busy.value=false}
+}
+onMounted(load);
+</script>
+<template>
+ <div class="execution-settings">
+  <div v-if="error" class="error-banner" role="alert">{{error}}</div>
+  <section class="table-card">
+   <div class="section-title"><div><h2>队列调度</h2><p>根据实际办理结果更新服务单并结算费用。</p></div><button class="button secondary" :disabled="busy" @click="load">读取状态</button></div>
+   <form class="execution-form" @submit.prevent="saveSettings">
+    <label class="checkbox-label"><input v-model="settings.enabled" type="checkbox"/>允许队列自动办理申请</label>
+    <div class="form-row">
+     <label>并行母号上限<input v-model.number="settings.max_parallel" type="number" min="1" max="8" required/></label>
+     <label>尝试次数上限<input v-model.number="settings.max_attempts" type="number" min="1" max="3" required/></label>
+     <label>重试间隔（秒）<input v-model.number="settings.retry_seconds" type="number" min="5" max="300" required/></label>
+    </div>
+    <label>子号全局代理<select v-model="settings.child_proxy_id" :required="settings.enabled"><option value="">请选择子号全局代理</option><option v-for="p in proxies" :key="p.id" :value="p.id" :disabled="!p.enabled">{{p.name}}{{p.enabled?'':'（已停用）'}}</option></select></label>
+    <p class="muted">子号的全部请求固定使用全局代理，母号请求使用各自绑定的专属代理。修改全局选择只影响新申请，已领取的申请保留原出口；缺少可用代理时保留排队，不直连。</p>
+    <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；结果待核实的请求不会自动重复发送。</p>
+    <button class="button primary" :disabled="busy">应用调度配置</button>
+   </form>
+  </section>
+  <section class="table-card">
+   <div class="section-title"><div><h2>母号管理</h2><p>在此维护母号与对应资源，申请人只需提交自己的账号资料。</p></div><button class="button primary" :disabled="busy" @click="editMother()">录入母号</button></div>
+   <div class="table-scroll"><table><thead><tr><th>母号</th><th>团队 / 席位</th><th>代理</th><th>校验 / 席位（剩余 / 总数）</th><th>状态</th><th>当前申请</th><th>操作</th></tr></thead><tbody>
+    <tr v-for="m in mothers" :key="m.id"><td><strong>{{m.name}}</strong><small class="block">{{m.email}}</small><small v-if="m.plan_type" class="block">{{m.plan_type}}</small></td><td>{{m.team_id}}<small class="block">{{m.seat_type==='default'?'标准席位':'高级席位（prolite）'}}</small><small v-if="m.token_expires_at" class="block">AT 到期：{{displayTime(m.token_expires_at)}}</small><small v-if="m.has_refresh" class="block">RT 已加密保存</small></td><td>{{proxies.find(p=>p.id===m.proxy_id)?.name||'专属代理不可用'}}</td><td><ResourceCheckSummary :check="m.check" mother/></td><td><span class="badge" :class="m.enabled?'green':'gray'">{{m.enabled?'启用':'停用'}}</span></td><td><button v-if="m.active_refund" class="link" @click="detail=m.active_refund">{{m.active_email}} · {{statuses[m.active_status||'']?.label||'处理中'}}</button><span v-else>空闲</span></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkMother(m)">校验 / 刷新席位</button><button class="button secondary" :disabled="busy" @click="editMother(m)">编辑</button><button class="button secondary danger" :disabled="busy||!!m.active_refund" @click="removing={kind:'mothers',id:m.id,name:m.name};modal='delete';formError=''">删除</button></div></td></tr>
+    <tr v-if="!mothers.length"><td colspan="7" class="empty-state">请先录入网络出口，再录入母号资源。</td></tr>
+   </tbody></table></div>
+   <p class="execution-footnote">需要协助的申请会保留资源占用，处理后才能办理后续申请。已产生历史记录的母号只能停用。</p>
+  </section>
+  <section class="table-card">
+   <div class="section-title"><div><h2>网络出口</h2><p>连接信息加密保管，列表只展示名称与可用状态。</p></div><button class="button primary" :disabled="busy" @click="editProxy()">录入代理</button></div>
+   <div class="table-scroll"><table><thead><tr><th>名称</th><th>状态</th><th>配置</th><th>连接测试</th><th>操作</th></tr></thead><tbody>
+    <tr v-for="p in proxies" :key="p.id"><td>{{p.name}}</td><td><span class="badge" :class="p.enabled?'green':'gray'">{{p.enabled?'启用':'停用'}}</span></td><td>{{settings.child_proxy_id===p.id?'子号全局代理':'连接信息已保存'}}</td><td><ResourceCheckSummary :check="p.check"/></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkProxy(p)">测试代理</button><button class="button secondary" :disabled="busy" @click="editProxy(p)">编辑</button><button class="button secondary danger" :disabled="busy||settings.child_proxy_id===p.id||mothers.some(m=>m.proxy_id===p.id)" @click="removing={kind:'proxies',id:p.id,name:p.name};modal='delete';formError=''">删除</button></div></td></tr>
+    <tr v-if="!proxies.length"><td colspan="5" class="empty-state">还没有网络出口配置。</td></tr>
+   </tbody></table></div>
+  </section>
+ </div>
+ <Modal v-if="modal" :title="modal==='mother'?'母号配置':modal==='proxy'?'代理配置':'删除配置'" :busy="busy" @close="!busy&&close()">
+  <form class="execution-form" @submit.prevent="save">
+   <template v-if="modal==='mother'">
+    <label>母号名称<input v-model="mother.name" required maxlength="100"/></label>
+    <label>Session JSON / Access Token<textarea v-model="mother.session" rows="5" autocomplete="off" spellcheck="false" :disabled="busy||parsing" :required="!mother.id" :placeholder="mother.id?'留空保留已保存凭据':'粘贴 Session JSON 或母号 AT，自动读取账号信息'"/></label>
+    <input ref="fileInput" hidden type="file" accept=".json,application/json" @change="importMother"/>
+    <div class="execution-actions"><button type="button" class="button secondary" :disabled="busy||parsing" @click="fileInput?.click()">导入 JSON</button><button type="button" class="button secondary" :disabled="busy||parsing" @click="parseMother">{{parsing?'解析中…':'解析凭据'}}</button><button type="button" class="button secondary" :disabled="busy||parsing" @click="checkMother()">校验 / 刷新席位</button></div>
+    <ResourceCheckSummary v-if="motherCheck" :check="motherCheck" mother/>
+    <p v-if="motherPreview" class="muted">{{motherPreview.email||'未读取到邮箱'}} · {{motherPreview.plan_type||'未提供计划'}}<br/>{{motherPreview.expires_at?`AT 到期：${displayTime(motherPreview.expires_at)}`:'AT 未提供到期时间'}}{{motherPreview.has_refresh?' · 已读取 RT':''}}。解析仅提取资料，校验用于确认可用性。</p>
+    <label>母号邮箱<input v-model="mother.email" type="email" placeholder="解析后自动填写"/></label>
+    <label>团队 ID<input v-model="mother.team_id" placeholder="自动读取，也可手工填写"/></label>
+    <label>Refresh Token（可选）<input v-model="mother.refresh_token" type="password" autocomplete="new-password" :placeholder="mother.has_refresh?'已保存，留空保留':'可从 Session JSON 自动提取'"/></label>
+    <label>母号专属代理<select v-model="mother.proxy_id" required><option value="" disabled>请选择母号专属代理</option><option v-for="p in proxies" :key="p.id" :value="p.id">{{p.name}}{{p.enabled?'':'（已停用）'}}</option></select></label>
+    <p class="muted">母号的校验和业务请求均使用此专属代理，子号使用上方的全局代理。凭据加密保存，编辑时留空保留。</p>
+    <label>席位类型<select v-model="mother.seat_type"><option value="default">标准席位（default）</option><option value="prolite">高级席位（prolite）</option></select></label>
+    <label class="checkbox-label"><input v-model="mother.enabled" type="checkbox"/>启用母号</label>
+   </template>
+   <template v-else-if="modal==='proxy'">
+    <label>代理名称<input v-model="proxy.name" required maxlength="100"/></label>
+    <label>代理地址<input v-model="proxy.url" type="password" autocomplete="new-password" :required="!proxy.id" :placeholder="proxy.id?'留空保留原地址':'IP:端口:用户名:密码'"/></label>
+    <p class="muted">支持 IP:端口:用户名:密码，默认 HTTP；也支持完整 HTTP、HTTPS、SOCKS5、SOCKS5H 地址。使用固定出口，任务运行中不能修改地址。</p>
+    <button type="button" class="button secondary" :disabled="busy" @click="checkProxy()">测试代理</button>
+    <ResourceCheckSummary v-if="proxyCheck" :check="proxyCheck"/>
+    <label class="checkbox-label"><input v-model="proxy.enabled" type="checkbox"/>启用代理</label>
+   </template>
+   <p v-else>确认删除“{{removing?.name}}”？有关联任务或母号的配置不能删除。</p>
+   <p v-if="formError" class="form-error" role="alert">{{formError}}</p>
+   <footer class="modal-actions"><button type="button" class="button secondary" :disabled="busy||parsing" @click="close">取消</button><button class="button primary" :disabled="busy||parsing">{{busy?'处理中…':modal==='delete'?'确认删除':'保存'}}</button></footer>
+  </form>
+ </Modal>
+ <RefundDetail v-if="detail" :id="detail" admin @close="detail='';load()" @changed="load"/>
+</template>

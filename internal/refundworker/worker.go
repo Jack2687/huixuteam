@@ -1,0 +1,223 @@
+// Package refundworker runs durable merge2 jobs independently of HTTP requests.
+package refundworker
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"llm-refund/internal/store"
+)
+
+type Runner interface {
+	Run(context.Context, *store.RefundJob, func(store.Checkpoint) error) error
+}
+type ProtocolRunner struct{ Python, Script string }
+
+func DefaultRunner() ProtocolRunner {
+	python := os.Getenv("REFUND_PYTHON")
+	if python == "" {
+		python = "python"
+	}
+	script := os.Getenv("REFUND_RUNNER")
+	if script == "" {
+		script = filepath.Join("runtime", "refund_runner.py")
+	}
+	return ProtocolRunner{Python: python, Script: script}
+}
+func (p ProtocolRunner) Check(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, p.Python, p.Script, "--check")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+func protocolMessage(code string) string {
+	switch code {
+	case "extra_verification":
+		return "账号要求额外邮箱或身份验证，请联系管理员处理。"
+	case "account_unavailable":
+		return "上游提示账号不可用，请管理员核实并清理邀请。"
+	case "mother_identity", "member_identity":
+		return "团队或账号身份校验未通过，已停止操作，请管理员核实。"
+	case "mother_http", "mother_network", "mother_shape", "mother_pagination":
+		return "团队操作未完成，请管理员检查母号、代理及当前进度后续跑。"
+	case "login_failed", "team_session_expired", "chatgpt_rate_limited":
+		return "登录或团队会话获取未完成，请管理员检查凭据、代理后续跑。"
+	case "export_rejected":
+		return "导出停用请求被上游拒绝，账号保留在团队内，等待处理。"
+	case "export_uncertain":
+		return "停用请求结果待核实，已停止自动重发。"
+	default:
+		return "任务未完成，进度已保留，请管理员核实后续跑。"
+	}
+}
+func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint func(store.Checkpoint) error) error {
+	cmd := exec.CommandContext(ctx, p.Python, "-u", p.Script)
+	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
+	// Raw upstream output can contain cookies or credentials. Only allowlisted
+	// checkpoints and result codes cross the process boundary into application data.
+	cmd.Stderr = io.Discard
+	input, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err = cmd.Start(); err != nil {
+		return errors.New("协议运行环境不可用，请管理员检查 Python 及依赖")
+	}
+	defer input.Close()
+	enc := json.NewEncoder(input)
+	if err = enc.Encode(j); err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return err
+	}
+	scan := bufio.NewScanner(output)
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	var gotResult, success bool
+	message := protocolMessage("")
+	for scan.Scan() {
+		var m struct {
+			Type string `json:"type"`
+			store.Checkpoint
+			OK   bool   `json:"ok"`
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(scan.Bytes(), &m) != nil {
+			cmd.Process.Kill()
+			break
+		}
+		switch m.Type {
+		case "checkpoint":
+			e := checkpoint(m.Checkpoint)
+			if e = enc.Encode(map[string]bool{"ok": e == nil}); e != nil {
+				cmd.Process.Kill()
+			}
+		case "result":
+			gotResult = true
+			success = m.OK
+			message = protocolMessage(m.Code)
+		default:
+			cmd.Process.Kill()
+		}
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil || scan.Err() != nil || !gotResult || !success {
+		return errors.New(message)
+	}
+	return nil
+}
+
+type Worker struct {
+	DB     *store.Store
+	Runner Runner
+}
+
+func (w *Worker) Run(ctx context.Context) {
+	defer w.DB.SetRefundRuntimeAvailable(false)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		err := error(nil)
+		if checked, ok := w.Runner.(interface{ Check(context.Context) error }); ok {
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err = checked.Check(checkCtx)
+			cancel()
+		}
+		if err == nil {
+			w.DB.SetRefundRuntimeAvailable(true)
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	timer := time.NewTicker(2 * time.Second)
+	defer timer.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		job, err := w.DB.ClaimRefund(ctx)
+		if err != nil && ctx.Err() == nil {
+			slog.Error("refund queue claim failed")
+		}
+		if job != nil {
+			wg.Add(1)
+			go func() { defer wg.Done(); w.Execute(ctx, job) }()
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+	}
+}
+func (w *Worker) Execute(parent context.Context, j *store.RefundJob) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
+	defer cancel()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if w.DB.RenewRefundLease(ctx, j) != nil {
+					cancel()
+					return
+				}
+				if w.DB.RefundProgress(ctx, j) != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	err := w.Runner.Run(ctx, j, func(c store.Checkpoint) error {
+		// Persist a late acceptance even on shutdown; it must not disappear with the
+		// cancelled HTTP/process context. All other steps respect cancellation.
+		callCtx := ctx
+		var stop context.CancelFunc
+		if c.Method == "merge_v2_accepted" {
+			callCtx, stop = context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+		}
+		return w.DB.RefundCheckpoint(callCtx, j, c)
+	})
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finishCancel()
+	state, readErr := w.DB.RefundExecution(finishCtx, j.ID)
+	if readErr == nil && state != nil && state.Step == "completed" {
+		return
+	}
+	message := protocolMessage("")
+	if err != nil {
+		message = err.Error()
+	}
+	if e := w.DB.RefundNeedsAttention(finishCtx, j, message); e != nil {
+		slog.Error("refund progress persistence failed", "refund_id", j.ID)
+	}
+}
