@@ -46,7 +46,7 @@ func main() {
 	announcements := []string{}
 	for _, in := range []store.AnnouncementInput{
 		{Title: "登录页公告：服务指引", Content: "提交申请后，可在服务台查看办理动态。", Category: "notice", Published: true, Pinned: true},
-		{Title: "登录页公告：上线说明", Content: "公告可以左右切换，长内容可以继续滚动查看。\n<script>window.loginAnnouncementXSS=true</script>", Category: "update", Published: true, Pinned: true},
+		{Title: "登录页公告：上线说明", Content: "公告自动向左滚动，点击可查看完整内容。\n<script>window.loginAnnouncementXSS=true</script>", Category: "update", Published: true, Pinned: true},
 		{Title: "登录页不可见的验收草稿", Content: "draft-private-canary", Category: "notice", Published: false, Pinned: true},
 	} {
 		id, err := s.SaveAnnouncement(ctx, actor, "", in)

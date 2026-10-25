@@ -16,6 +16,20 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 	})
 }
 func (s *Server) adminRoutes(m *http.ServeMux) {
+	m.Handle("GET /api/admin/reports/accounts", s.require("admin.reports.read", func(w http.ResponseWriter, r *http.Request) {
+		p, size := pagination(r)
+		if r.URL.Query().Get("size") == "" {
+			size = 100
+		}
+		q := r.URL.Query()
+		exclude := q.Get("exclude_admin")
+		if exclude != "" && exclude != "true" && exclude != "false" {
+			fail(w, 400, "管理员筛选参数无效")
+			return
+		}
+		data, err := s.DB.AdminAccountReport(r.Context(), q.Get("period"), q.Get("date"), q.Get("q"), exclude != "false", p, size)
+		s.result(w, data, err)
+	}))
 	m.Handle("GET /api/admin/overview", s.require("admin.overview.read", func(w http.ResponseWriter, r *http.Request) {
 		data, err := s.DB.AdminOverview(r.Context(), current(r).Role == "admin")
 		s.result(w, data, err)

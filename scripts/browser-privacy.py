@@ -95,21 +95,26 @@ try:
     expect('登录页公告：上线说明')
     assert '登录页不可见的验收草稿' not in text()
     assert evaluate('window.loginAnnouncementXSS===undefined')
-    def login_title():return evaluate('document.querySelector(".login-announcement-card[aria-hidden=false] h3").textContent')
-    assert login_title()=='登录页公告：上线说明'
-    click('下一条公告');batch(['wait','400']);assert login_title()=='登录页公告：服务指引'
-    evaluate('document.querySelector(".login-announcement-card[aria-hidden=false]").focus()')
-    batch(['press','ArrowLeft'],['wait','400']);assert login_title()=='登录页公告：上线说明'
+    def moving_left():
+        assert evaluate('''(async()=>{const t=document.querySelector('.ticker-track');
+        const x=()=>new DOMMatrix(getComputedStyle(t).transform).m41;const before=x();
+        await new Promise(r=>setTimeout(r,500));return x()<before-8})()''')
+    moving_left()
+    assert evaluate('''(()=>{const groups=[...document.querySelectorAll('.ticker-group')];return groups.length===2 && Math.abs(groups[0].getBoundingClientRect().width-groups[1].getBoundingClientRect().width)<1})()''')
+    click('暂停滚动公告')
+    assert evaluate('getComputedStyle(document.querySelector(".ticker-track")).animationPlayState')=='paused'
+    click('继续滚动公告');moving_left()
+    evaluate('document.querySelector(".ticker-group button").click()');expect('登录页公告：上线说明');click('关闭')
     shot('login-announcements-desktop')
     batch(['set','viewport','390','844'],['wait','300'])
     assert not evaluate('document.documentElement.scrollWidth>innerWidth')
-    batch(['scroll','right','340','--selector','.login-announcement-slides'],['wait','400'])
-    assert login_title()=='登录页公告：服务指引'
+    moving_left()
     shot('login-announcements-mobile')
     batch(['set','viewport','1440','950'])
     fill('登录邮箱',fixture['email']);fill('账户密码',fixture['password']);click('进入服务台');expect('保密验收，欢迎回来。')
     assert evaluate('document.querySelector(".service-terms-callout p").textContent')=='费用按服务办理结果结算，不以退款到账为依据。申请尚未开始时可撤回，开始后可在详情跟踪。'
     assert evaluate('parseFloat(getComputedStyle(document.querySelector(".service-terms-callout p")).fontSize)>=22')
+    moving_left()
     shot('overview-terms-desktop')
     batch(['set','viewport','390','844']);shot('overview-terms-mobile')
     assert not evaluate('document.documentElement.scrollWidth>innerWidth')
@@ -127,7 +132,23 @@ try:
         assert request(path)['status']==200
     assert request('/api/admin/refund-settings')['status']==403
     click('退出账户');fill('登录邮箱',CONFIG['BOOTSTRAP_EMAIL']);fill('账户密码',CONFIG['BOOTSTRAP_PASSWORD']);click('进入服务台');expect('Admin，欢迎回来。')
-    click('运营控制台');click('服务资源与调度','tab');expect('单个母号依次办理');clean_page()
+    click('运营控制台');click('账户报表','tab');expect('期间充值');clean_page()
+    assert evaluate('document.querySelector(".report-exclude input").checked')
+    fill('搜索报表账户',fixture['email']);click('查询');expect(fixture['email'])
+    for period in ('每日','每周','每月','每年'):
+        click(period);expect(fixture['email'])
+        data=json.loads(request('/api/admin/reports/accounts?period='+{'每日':'day','每周':'week','每月':'month','每年':'year'}[period]+'&q='+fixture['email'])['data'])
+        assert data['total']==1 and data['summary']['recharged']==9000 and data['summary']['used']==3000 and data['summary']['frozen']==3000
+        assert data['summary']['applications']==3 and data['summary']['succeeded']==1 and data['summary']['attention']==1 and data['summary']['cancelled']==1
+    shot('account-reports-desktop')
+    batch(['set','viewport','390','844']);shot('account-reports-mobile')
+    assert not evaluate('document.documentElement.scrollWidth>innerWidth')
+    batch(['set','viewport','1440','950'])
+    fill('搜索报表账户',CONFIG['BOOTSTRAP_EMAIL']);click('查询');expect('没有符合条件的账户')
+    batch(['uncheck',ref('排除管理员账号','checkbox')]);expect(CONFIG['BOOTSTRAP_EMAIL'])
+    click('上一期');expect(CONFIG['BOOTSTRAP_EMAIL']);click('本期');expect(CONFIG['BOOTSTRAP_EMAIL'])
+    assert request('/api/admin/reports/accounts')['status']==200
+    click('服务资源与调度','tab');expect('单个母号依次办理');clean_page()
     assert json.loads(request('/api/admin/refund-settings')['data'])['settings']['enabled'] is False
     click('申请清单','tab')
     for status in ('succeeded','attention'):

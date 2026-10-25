@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onUnmounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import AdminAnnouncements from "./AdminAnnouncements.vue";
+import AdminAccountReports from "./AdminAccountReports.vue";
 import Modal from "./Modal.vue";
 import Pagination from "./Pagination.vue";
 import RefundDetail from "./RefundDetail.vue";
@@ -50,6 +51,7 @@ const emit = defineEmits<{ toast: [message: string]; changed: [] }>();
 const can = (permission: string) => props.user.permissions.includes(permission);
 const allTabs = [
   { key: "overview", label: "运营概况", permission: "admin.overview.read" },
+  { key: "reports", label: "账户报表", permission: "admin.reports.read" },
   { key: "users", label: "账户管理", permission: "admin.users.manage" },
   { key: "refunds", label: "申请清单", permission: "admin.refunds.read" },
   { key: "execution", label: "服务资源与调度", permission: "admin.refund.execute" },
@@ -121,6 +123,7 @@ const actions: Record<string, string> = {
   "code.export": "导出兑换码",
 };
 const capabilities = [
+  ["查看逐人资金与申请报表", true, false, false],
   ["编辑、发布与撤下平台公告", true, false, false],
   ["个人申请、账单和 API 密钥", true, true, true],
   ["使用兑换码获得积分", true, true, true],
@@ -142,7 +145,7 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements") return;
+    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports") return;
     const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value, status: status.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
@@ -470,6 +473,7 @@ function codeState(code: Code) {
     </section></template
   >
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
+  <AdminAccountReports v-else-if="tab === 'reports'"/>
   <RefundExecutionSettings v-else-if="tab === 'execution'" @toast="emit('toast',$event)"/>
   <section v-else-if="tab === 'permissions'" class="table-card">
     <div class="section-title">
