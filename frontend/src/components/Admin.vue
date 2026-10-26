@@ -94,6 +94,12 @@ const modal = ref(""),
   formError = ref(""),
   confirmCode = ref<Code>();
 const selectedCodes = ref(new Map<string, boolean>());
+const selectedUsers = ref(new Map<string, User>());
+const feeTargets = ref<User[]>([]);
+const bulkFeeOpen = ref(false);
+const bulkFee = ref<number | string>("");
+const allUsersSelected = computed(() => users.value.length > 0 && users.value.every(u => selectedUsers.value.has(u.id)));
+const someUsersSelected = computed(() => users.value.some(u => selectedUsers.value.has(u.id)));
 const deleteIDs = ref<string[]>([]);
 const deleteUser = ref<User>();
 const allPageSelected = computed(() => codes.value.length > 0 && codes.value.every(c => selectedCodes.value.has(c.id)));
@@ -112,6 +118,7 @@ const actions: Record<string, string> = {
   "announcement.create": "撰写公告", "announcement.update": "调整公告", "announcement.delete": "移除公告",
   "user.create": "新增账户",
   "user.update": "调整账户资料与权限",
+  "user.service_fee": "批量调整服务单价",
   "user.delete": "删除账户",
   "user.password_reset": "重置密码",
   "balance.credit": "积分入账",
@@ -156,6 +163,9 @@ async function load() {
       switch (tab.value) {
         case "users":
           users.value = data.items;
+          for (const u of users.value) {
+            if (selectedUsers.value.has(u.id)) selectedUsers.value.set(u.id, u);
+          }
           break;
         case "codes":
           codes.value = data.items;
@@ -179,6 +189,7 @@ async function load() {
 }
 watch(tab, () => {
   selectedCodes.value.clear();
+  selectedUsers.value.clear();
   page.value = 1;
   search.value = "";
   total.value = 0;
@@ -186,6 +197,7 @@ watch(tab, () => {
 });
 watch(() => [page.value, size.value], load);
 watch(search, () => {
+  selectedUsers.value.clear();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     page.value = 1;
@@ -199,7 +211,12 @@ watch(
     load();
   },
 );
-watch(() => props.user.id, load, { immediate: true });
+watch(() => props.user.id, () => {
+  selectedUsers.value.clear();
+  bulkFeeOpen.value = false;
+  feeTargets.value = [];
+  load();
+}, { immediate: true });
 onUnmounted(() => {
   abort?.abort();
   clearTimeout(searchTimer);
@@ -330,11 +347,57 @@ async function confirmDeleteUser() {
   formError.value = "";
   try {
     await api(`/api/admin/users/${deleteUser.value.id}`, { method: "DELETE" });
+    selectedUsers.value.delete(deleteUser.value.id);
     deleteUser.value = undefined;
     if (users.value.length === 1 && page.value > 1) page.value--;
     await load();
     emit("changed");
     emit("toast", "账户已删除，历史申请和积分账单已保留");
+  } catch (e) {
+    formError.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+function selectUser(u: User, checked: boolean) {
+  if (!checked) selectedUsers.value.delete(u.id);
+  else if (selectedUsers.value.has(u.id) || selectedUsers.value.size < 1000) selectedUsers.value.set(u.id, u);
+  else emit("toast", "每批最多选择 1000 个账户");
+}
+function selectUserPage(checked: boolean) {
+  if (checked && new Set([...selectedUsers.value.keys(), ...users.value.map(u => u.id)]).size > 1000) {
+    emit("toast", "每批最多选择 1000 个账户，请减少选择后重试");
+    return;
+  }
+  for (const u of users.value) selectUser(u, checked);
+}
+function openBulkFee() {
+  if (!selectedUsers.value.size || busy.value) return;
+  feeTargets.value = [...selectedUsers.value.values()];
+  bulkFee.value = "";
+  formError.value = "";
+  bulkFeeOpen.value = true;
+}
+async function saveBulkFee() {
+  if (busy.value || !feeTargets.value.length) return;
+  const value = String(bulkFee.value).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(value) || Number(value) > 100000) {
+    formError.value = "请输入 0～100000 的服务单价，最多两位小数";
+    return;
+  }
+  busy.value = true;
+  formError.value = "";
+  try {
+    const result = await api<{ updated: number }>("/api/admin/users/service-fee", {
+      method: "PATCH",
+      body: JSON.stringify({ ids: feeTargets.value.map(u => u.id), service_fee: Math.round(Number(value) * 100) }),
+    });
+    bulkFeeOpen.value = false;
+    selectedUsers.value.clear();
+    feeTargets.value = [];
+    await load();
+    emit("changed");
+    emit("toast", `已调整 ${result.updated} 个账户的服务单价`);
   } catch (e) {
     formError.value = (e as Error).message;
   } finally {
@@ -574,10 +637,16 @@ function codeState(code: Code) {
     <div v-if="tab === 'users'" class="admin-toolbar">
       <input v-model="search" aria-label="搜索用户" placeholder="搜索姓名或邮箱…" />
     </div>
+    <div v-if="tab === 'users'" class="code-batch-toolbar">
+      <span>已选 {{ selectedUsers.size }} 个账户<span class="muted">（可跨页选择）</span></span>
+      <button class="text-button" :disabled="!selectedUsers.size || busy" @click="selectedUsers.clear()">清空选择</button>
+      <button class="button secondary" :disabled="!selectedUsers.size || busy || loading" @click="openBulkFee">批量调整单价</button>
+    </div>
     <div class="table-scroll">
       <table v-if="tab === 'users'">
         <thead>
           <tr>
+            <th class="selection-cell"><input type="checkbox" aria-label="选择本页账户" :checked="allUsersSelected" :indeterminate="someUsersSelected && !allUsersSelected" :disabled="busy || loading || !users.length" @change="selectUserPage(($event.target as HTMLInputElement).checked)" /></th>
             <th>用户</th>
             <th>角色</th>
             <th>可用 / 已预留积分</th>
@@ -588,6 +657,7 @@ function codeState(code: Code) {
         </thead>
         <tbody>
           <tr v-for="u in users" :key="u.id">
+            <td class="selection-cell"><input type="checkbox" :aria-label="`选择账户 ${u.email}`" :checked="selectedUsers.has(u.id)" :disabled="busy || loading" @change="selectUser(u, ($event.target as HTMLInputElement).checked)" /></td>
             <td>
               <div class="account-cell">
                 <span class="account-avatar">{{ u.name[0] }}</span>
@@ -942,6 +1012,23 @@ function codeState(code: Code) {
       </button>
     </footer></Modal
   >
+  <Modal v-if="bulkFeeOpen" title="批量调整服务单价" :description="`已选择 ${feeTargets.length} 个账户`" :busy="busy" @close="!busy && (bulkFeeOpen = false)">
+    <form @submit.prevent="saveBulkFee">
+      <div class="modal-body">
+        <label>统一服务单价（积分）<input v-model="bulkFee" type="number" min="0" max="100000" step="0.01" required :disabled="busy" placeholder="输入每笔服务的新价格" /></label>
+        <p class="field-help">新单价用于之后提交的申请，已提交申请的预留和结算费用保持原价。1 积分 = 1 R。</p>
+        <details class="batch-fee-preview">
+          <summary>查看所选账户与原单价（{{ feeTargets.length }} 个）</summary>
+          <ul><li v-for="u in feeTargets" :key="u.id"><span>{{ u.name }} · {{ u.email }}</span><strong>{{ money(u.service_fee) }} 积分 / 笔</strong></li></ul>
+        </details>
+        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+      </div>
+      <footer class="modal-actions">
+        <button type="button" class="button secondary" :disabled="busy" @click="bulkFeeOpen = false">取消</button>
+        <button class="button primary" :disabled="busy || !feeTargets.length">{{ busy ? '保存中…' : `确认调整 ${feeTargets.length} 个账户` }}</button>
+      </footer>
+    </form>
+  </Modal>
   <Modal v-if="deleteUser" title="删除账户" :description="deleteUser.email" :busy="busy" @close="!busy && (deleteUser = undefined)">
     <div class="modal-body">
       <p>确定删除「{{ deleteUser.name }}」？删除后将从账户管理移除，全部登录会话和 API 密钥立即失效。</p>

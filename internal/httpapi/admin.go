@@ -62,6 +62,21 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 		id, err := s.DB.AdminCreateUser(r.Context(), current(r).ID, body)
 		s.result(w, map[string]string{"id": id}, err)
 	}))
+	m.Handle("PATCH /api/admin/users/service-fee", s.require("admin.users.manage", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			IDs        []string `json:"ids"`
+			ServiceFee *int64   `json:"service_fee"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if body.ServiceFee == nil {
+			fail(w, 400, "请填写服务单价")
+			return
+		}
+		err := s.DB.AdminSetServiceFees(r.Context(), current(r).ID, body.IDs, *body.ServiceFee)
+		s.result(w, map[string]int{"updated": len(body.IDs)}, err)
+	}))
 	m.Handle("PATCH /api/admin/users/{id}", s.require("admin.users.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Email      *string `json:"email"`
