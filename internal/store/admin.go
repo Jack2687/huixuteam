@@ -17,7 +17,7 @@ import (
 func Permissions(role string) []string {
 	base := []string{"workspace.read", "refunds.create", "refunds.cancel", "billing.read", "keys.manage", "codes.redeem"}
 	if role == "admin" {
-		return append(base, "admin.risk.manage", "admin.overview.read", "admin.reports.read", "admin.refunds.read", "admin.users.manage", "admin.credits.write", "admin.codes.manage", "admin.audit.read", "admin.refund.execute", "admin.announcements.manage")
+		return append(base, "admin.refunds.timeline", "admin.risk.manage", "admin.overview.read", "admin.reports.read", "admin.refunds.read", "admin.users.manage", "admin.credits.write", "admin.codes.manage", "admin.audit.read", "admin.refund.execute", "admin.announcements.manage")
 	}
 	if role == "operator" {
 		return append(base, "admin.overview.read", "admin.refunds.read")

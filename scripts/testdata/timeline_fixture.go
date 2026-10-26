@@ -43,6 +43,10 @@ func main() {
 	must(err)
 	must(s.Credit(ctx, email, 90000, "offline timeline fixture"))
 	output := map[string]any{"email": email, "password": password}
+	operatorEmail := "timeline-operator-" + store.ID()[:8] + "@example.test"
+	_, err = s.AdminCreateUser(ctx, actor, store.UserInput{Email: operatorEmail, Name: "流程运营验收", Password: password, Role: "operator", ServiceFee: 3000})
+	must(err)
+	output["operator_email"] = operatorEmail
 	for _, kind := range []string{"succeeded", "attention", "running", "queued", "legacy", "failed"} {
 		account := kind + "-" + store.ID()[:8] + "@example.test"
 		ids, _, err := s.CreateRefunds(ctx, uid, store.Token(), []refundprovider.Account{{Email: account, Password: "private-child-password", TOTPSecret: "JBSWY3DPEHPK3PXP"}})

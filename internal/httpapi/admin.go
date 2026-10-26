@@ -16,7 +16,7 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 	})
 }
 func (s *Server) adminRoutes(m *http.ServeMux) {
-	m.Handle("GET /api/admin/refunds/{id}/timeline", s.require("admin.refunds.read", func(w http.ResponseWriter, r *http.Request) {
+	m.Handle("GET /api/admin/refunds/{id}/timeline", s.require("admin.refunds.timeline", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Set("Vary", "Cookie")
 		data, err := s.DB.AdminRefundTimeline(r.Context(), r.PathValue("id"))

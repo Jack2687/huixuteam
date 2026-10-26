@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue';
 import { api, money, statuses, feeLabel, exportCSV, type Refund } from '../lib/api';
 import Icon from './Icon.vue';
 import Pagination from './Pagination.vue';
 import RefundDetail from './RefundDetail.vue';
-import AdminRefundTimeline from './AdminRefundTimeline.vue';
+const AdminRefundTimeline=defineAsyncComponent(()=>import('./AdminRefundTimeline.vue'));
+defineProps<{canTimeline:boolean}>();
 
 type Row = Refund & {user_id:string;user_name:string;user_email:string;started_at:string|null;finished_at:string|null;wait_seconds:number|null;handle_seconds:number|null;long_wait:boolean;long_running:boolean};
 type Summary = {total:number;queued:number;running:number;attention:number;succeeded:number;failed:number;cancelled:number;long_wait:number;long_running:number;frozen:number;settled:number;released:number};
@@ -94,7 +95,7 @@ onUnmounted(()=>{sequence++;controller?.abort();clearInterval(timer);clearTimeou
    <Pagination v-model:page="page" v-model:size="size" :total="data?.total??0" label="申请全监控分页"/>
    <p class="monitor-note">办理历时包含待跟进期间；缺少历史开始记录时显示“—”。打开详情期间暂停列表自动刷新。</p>
   </section>
-  <RefundDetail v-if="detail" :key="detail" :id="detail" admin @close="detail='';load()" @changed="load();emit('changed')"><template #monitor="{status}"><AdminRefundTimeline :id="detail" :status="status"/></template></RefundDetail>
+  <RefundDetail v-if="detail" :key="detail" :id="detail" admin @close="detail='';load()" @changed="load();emit('changed')"><template #monitor="{status}"><AdminRefundTimeline v-if="canTimeline" :id="detail" :status="status"/></template></RefundDetail>
  </div>
 </template>
 

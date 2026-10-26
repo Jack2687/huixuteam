@@ -31,6 +31,14 @@ try:
  click('申请记录');click('查看 '+fixture['succeeded']['email']+' 的申请');expect('服务单详情')
  assert '办理流程记录' not in text();assert not evaluate('document.querySelector(".stage-monitor")!==null');click('关闭')
  for p in (ROOT/'webui/static/assets').glob('admin-timeline-*'):assert request('/assets/'+p.name)['status']==403
+ click('退出账户');fill('登录邮箱',fixture['operator_email']);fill('账户密码',fixture['password']);click('进入服务台');expect('流程运营验收，欢迎回来。')
+ assert request(timeline_path('succeeded'))['status']==403
+ click('运营控制台');expect('申请全监控');click('申请全监控','tab')
+ fill('搜索监控申请',fixture['succeeded']['email'],'searchbox');batch(['wait','500'])
+ click('监控详情 '+fixture['succeeded']['email']);expect('服务单详情')
+ assert '办理流程记录' not in text();assert not evaluate('document.querySelector(".stage-monitor")!==null')
+ click('关闭')
+ for p in (ROOT/'webui/static/assets').glob('admin-timeline-*'):assert request('/assets/'+p.name)['status']==403
  click('退出账户');fill('登录邮箱',CONFIG['BOOTSTRAP_EMAIL']);fill('账户密码',CONFIG['BOOTSTRAP_PASSWORD']);click('进入服务台');expect('Admin，欢迎回来。')
  click('运营控制台');click('申请全监控','tab');expect('申请全监控')
  open_detail('succeeded');expect('第 2 次');expect('已受理')

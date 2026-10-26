@@ -169,7 +169,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		path := "/" + strings.TrimPrefix(file, "static/")
 		request("GET", path, "", "", 401)
 		request("GET", path, "", member, 403)
-		if strings.Contains(file, "admin-execution-") {
+		if strings.Contains(file, "admin-execution-") || strings.Contains(file, "admin-timeline-") {
 			request("GET", path, "", operator, 403)
 		}
 		request("GET", path, "", ad, 200)

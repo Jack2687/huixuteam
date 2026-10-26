@@ -490,7 +490,7 @@ function codeState(code: Code) {
   >
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAccountReports v-else-if="tab === 'reports'"/>
-  <AdminRefundMonitor v-else-if="tab === 'refunds'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
+  <AdminRefundMonitor v-else-if="tab === 'refunds'" :can-timeline="can('admin.refunds.timeline')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminRiskMonitor v-else-if="tab === 'risk'" @toast="emit('toast',$event)"/>
   <RefundExecutionSettings v-else-if="tab === 'execution'" @toast="emit('toast',$event)"/>
   <section v-else-if="tab === 'permissions'" class="table-card">

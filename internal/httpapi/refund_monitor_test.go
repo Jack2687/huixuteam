@@ -95,9 +95,12 @@ func TestRefundMonitorPermissionsAndPublicSchema(t *testing.T) {
 	request(timeline, "", "", 401)
 	request(timeline, mem, "", 403)
 	request(timeline, "", key, 401)
+	opsSession, err := s.NewSession(ctx, o.ID)
+	must(err)
+	request(timeline, opsSession, "", 403)
 	_, err = s.Pool.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'private-canary export_and_deactivate private-password',true)", ids[0])
 	must(err)
-	for _, id := range []string{a.ID, o.ID} {
+	for _, id := range []string{a.ID} {
 		cookie, err := s.NewSession(ctx, id)
 		must(err)
 		raw := request(timeline, cookie, "", 200)
