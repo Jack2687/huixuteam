@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -244,40 +243,25 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "邮箱或密码格式不正确")
 		return
 	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	s.mu.Lock()
-	now := time.Now()
-	for k, a := range s.attempts {
-		if now.After(a.until) {
-			delete(s.attempts, k)
-		}
-	}
-	a := s.attempts[ip]
-	if a.count >= 10 {
-		s.mu.Unlock()
-		w.Header().Set("Retry-After", "900")
-		fail(w, 429, "尝试次数过多，请 15 分钟后重试")
+	key := loginAttemptKey(body.Email)
+	if retry := s.reserveLoginAttempt(key, time.Now()); retry > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retry))
+		fail(w, 429, "此账号登录尝试过多，请 "+strconv.Itoa((retry+59)/60)+" 分钟后重试")
 		return
 	}
-	if a.count == 0 {
-		a.until = now.Add(15 * time.Minute)
-	}
-	a.count++
-	s.attempts[ip] = a
-	s.mu.Unlock()
 	u, err := s.DB.Login(r.Context(), body.Email, body.Password)
 	if err != nil {
 		fail(w, 401, "邮箱或密码不正确")
 		return
 	}
+	s.mu.Lock()
+	delete(s.attempts, key)
+	s.mu.Unlock()
 	token, err := s.DB.NewSession(r.Context(), u.ID)
 	if err != nil {
 		s.result(w, nil, err)
 		return
 	}
-	s.mu.Lock()
-	delete(s.attempts, ip)
-	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "refund_session", Value: token, Path: "/", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode, MaxAge: 7 * 24 * 3600})
 	respond(w, 200, u)
 }
