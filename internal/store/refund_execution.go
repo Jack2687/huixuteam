@@ -252,7 +252,9 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 	if _, err = tx.Exec(ctx, "UPDATE refund_execution SET step=$2,updated_at=now() WHERE refund_id=$1", j.ID, next); err != nil {
 		return err
 	}
-	if c.Method != "completed" && next != step {
+	// A repeated start is a distinct attempt, even when the checkpoint does not
+	// change. Retain its timestamp without changing recovery or upstream logic.
+	if c.Method != "completed" && (next != step || c.Method == "login" || c.Method == "inviting" || c.Method == "removing") {
 		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,$2,true)", j.ID, message); err != nil {
 			return err
 		}

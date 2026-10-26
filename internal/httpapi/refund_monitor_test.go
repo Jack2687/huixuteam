@@ -91,4 +91,39 @@ func TestRefundMonitorPermissionsAndPublicSchema(t *testing.T) {
 		request(path+"?status=invalid", cookie, "", 400)
 		request(path+"?status=running&size=1", cookie, "", 200)
 	}
+	timeline := "/api/admin/refunds/" + ids[0] + "/timeline"
+	request(timeline, "", "", 401)
+	request(timeline, mem, "", 403)
+	request(timeline, "", key, 401)
+	_, err = s.Pool.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'private-canary export_and_deactivate private-password',true)", ids[0])
+	must(err)
+	for _, id := range []string{a.ID, o.ID} {
+		cookie, err := s.NewSession(ctx, id)
+		must(err)
+		raw := request(timeline, cookie, "", 200)
+		for _, private := range []string{"private-canary", "export_and_deactivate", "password", "JBSWY3DPEHPK3PXP", "lease", "mother", "proxy", "internal", "step"} {
+			if strings.Contains(string(raw), private) {
+				t.Fatal("timeline leaks", private)
+			}
+		}
+		var dto map[string]json.RawMessage
+		must(json.Unmarshal(raw, &dto))
+		if len(dto) != 3 {
+			t.Fatal("timeline root schema", dto)
+		}
+		var items []map[string]any
+		must(json.Unmarshal(dto["items"], &items))
+		for _, item := range items {
+			fields := strings.Fields("stage attempt status started_at finished_at duration_seconds reason")
+			if len(item) != len(fields) {
+				t.Fatal("timeline item schema", item)
+			}
+			for _, field := range fields {
+				if _, ok := item[field]; !ok {
+					t.Fatal("missing field", field)
+				}
+			}
+		}
+		request("/api/admin/refunds/nonexistent/timeline", cookie, "", 404)
+	}
 }

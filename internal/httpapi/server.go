@@ -96,6 +96,9 @@ func New(db *store.Store, secure bool) http.Handler {
 		if _, err := fs.Stat(assets, path); err == nil {
 			if strings.HasPrefix(path, "assets/admin-") {
 				permission := "admin.overview.read"
+				if strings.HasPrefix(path, "assets/admin-timeline-") {
+					permission = "admin.refunds.read"
+				}
 				if strings.HasPrefix(path, "assets/admin-execution-") {
 					permission = "admin.refund.execute"
 				}
