@@ -99,6 +99,7 @@ const modal = ref(""),
   confirmCode = ref<Code>();
 const selectedCodes = ref(new Map<string, boolean>());
 const deleteIDs = ref<string[]>([]);
+const deleteUser = ref<User>();
 const allPageSelected = computed(() => codes.value.length > 0 && codes.value.every(c => selectedCodes.value.has(c.id)));
 const somePageSelected = computed(() => codes.value.some(c => selectedCodes.value.has(c.id)));
 const hasLegacySelection = computed(() => [...selectedCodes.value.values()].some(exportable => !exportable));
@@ -114,6 +115,7 @@ const actions: Record<string, string> = {
   "announcement.create": "撰写公告", "announcement.update": "调整公告", "announcement.delete": "移除公告",
   "user.create": "新增账户",
   "user.update": "调整账户资料与权限",
+  "user.delete": "删除账户",
   "user.password_reset": "重置密码",
   "balance.credit": "积分入账",
   "balance.debit": "积分扣减",
@@ -238,6 +240,7 @@ async function save() {
   try {
     if (modal.value === "user") {
       const body = {
+        email: formEmail.value,
         name: formName.value,
         role: formRole.value,
         service_fee: Math.round(Number(formFee.value) * 100),
@@ -320,6 +323,24 @@ async function toggleCode() {
     confirmCode.value = undefined;
     await load();
     emit("toast", "兑换码状态已更新");
+  } catch (e) {
+    formError.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function confirmDeleteUser() {
+  if (!deleteUser.value || busy.value) return;
+  busy.value = true;
+  formError.value = "";
+  try {
+    await api(`/api/admin/users/${deleteUser.value.id}`, { method: "DELETE" });
+    deleteUser.value = undefined;
+    if (users.value.length === 1 && page.value > 1) page.value--;
+    await load();
+    emit("changed");
+    emit("toast", "账户已删除，历史申请和积分账单已保留");
   } catch (e) {
     formError.value = (e as Error).message;
   } finally {
@@ -608,12 +629,13 @@ function codeState(code: Code) {
             <td>
               <div class="admin-row-actions">
                 <button class="text-button" @click="open('user', u)">
-                  编辑权限</button
+                  编辑账户</button
                 ><button class="text-button" @click="open('credit', u)">
                   调整积分</button
                 ><button class="text-button" @click="open('password', u)">
                   重置密码
                 </button>
+                <button class="text-button danger" :disabled="busy || u.id === user.id || u.frozen > 0" :title="u.id === user.id ? '不能删除当前登录账户' : u.frozen > 0 ? '请先处理已预留积分对应的申请' : '删除账户并保留历史账单'" @click="deleteUser = u; formError = ''">删除账户</button>
               </div>
             </td>
           </tr>
@@ -771,7 +793,7 @@ function codeState(code: Code) {
     :title="
       modal === 'user'
         ? target
-          ? '编辑用户与权限'
+          ? '编辑账户资料与权限'
           : '新增账户'
         : modal === 'credit'
           ? '调整积分'
@@ -795,7 +817,6 @@ function codeState(code: Code) {
               >邮箱<input
                 v-model="formEmail"
                 type="email"
-                :disabled="!!target"
                 required
                 maxlength="254" /></label
             ><label v-if="!target" class="span-two"
@@ -835,7 +856,7 @@ function codeState(code: Code) {
             /><span>停用此账号（登录会话和 API 密钥将无法访问）</span></label
           >
           <p class="field-help">
-            调整服务费只影响之后的新申请。角色变更将结束该账号的现有登录会话。
+            调整服务费只影响之后的新申请。修改邮箱或角色后，该账户需重新登录；修改邮箱不影响历史申请、积分和已有 API 密钥。
           </p></template
         ><template v-if="modal === 'password'"
           ><label
@@ -978,6 +999,17 @@ function codeState(code: Code) {
     </footer></Modal
   >
   <RefundDetail v-if="detailID" :id="detailID" admin @close="detailID = ''" />
+  <Modal v-if="deleteUser" title="删除账户" :description="deleteUser.email" :busy="busy" @close="!busy && (deleteUser = undefined)">
+    <div class="modal-body">
+      <p>确定删除「{{ deleteUser.name }}」？删除后将从账户管理移除，全部登录会话和 API 密钥立即失效。</p>
+      <p>历史申请、积分账单和操作留痕会保留，剩余 {{ money(deleteUser.balance) }} 积分不会自动扣除。仍有未结束申请时不能删除。</p>
+      <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+    </div>
+    <footer class="modal-actions">
+      <button class="button secondary" :disabled="busy" @click="deleteUser = undefined">取消</button>
+      <button class="button primary danger" :disabled="busy" @click="confirmDeleteUser">{{ busy ? '删除中…' : '确认删除' }}</button>
+    </footer>
+  </Modal>
   <Modal v-if="deleteIDs.length" title="批量删除兑换码" :busy="busy" @close="!busy && (deleteIDs = [])">
     <div class="modal-body">
       <p>确定删除选中的 {{ deleteIDs.length }} 个兑换码？删除后不能继续兑换、恢复或导出，已有兑换和积分记录会保留。</p>

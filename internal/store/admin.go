@@ -52,7 +52,7 @@ func adminLock(ctx context.Context, tx pgx.Tx, actor string) error {
 	}
 	var role string
 	var disabled bool
-	if err := tx.QueryRow(ctx, "SELECT role,disabled FROM users WHERE id=$1", actor).Scan(&role, &disabled); err != nil {
+	if err := tx.QueryRow(ctx, "SELECT role,disabled FROM users WHERE id=$1 AND deleted_at IS NULL", actor).Scan(&role, &disabled); err != nil {
 		return err
 	}
 	if role != "admin" || disabled {
@@ -80,11 +80,13 @@ func validateUser(in UserInput, create bool) error {
 	if in.ServiceFee < 0 || in.ServiceFee > 10000000 {
 		return invalid("服务费超出允许范围")
 	}
-	if create {
+	if create || in.Email != "" {
 		address, err := mail.ParseAddress(in.Email)
 		if err != nil || address.Address != in.Email || len(in.Email) > 254 {
 			return invalid("邮箱格式不正确")
 		}
+	}
+	if create {
 		if len(in.Password) < 12 || len(in.Password) > 72 {
 			return invalid("密码须为 12～72 字节")
 		}
@@ -92,7 +94,7 @@ func validateUser(in UserInput, create bool) error {
 	return nil
 }
 func (s *Store) AdminUsers(ctx context.Context, q string, page, size int) ([]User, int, error) {
-	where := " FROM users WHERE ($1='' OR position(lower($1) in lower(email||' '||name))>0)"
+	where := " FROM users WHERE deleted_at IS NULL AND ($1='' OR position(lower($1) in lower(email||' '||name))>0)"
 	var total int
 	if err := s.Pool.QueryRow(ctx, "SELECT count(*)"+where, q).Scan(&total); err != nil {
 		return nil, 0, err
@@ -145,6 +147,8 @@ func (s *Store) AdminCreateUser(ctx context.Context, actor string, in UserInput)
 	return id, tx.Commit(ctx)
 }
 func (s *Store) AdminUpdateUser(ctx context.Context, actor, id string, in UserInput) error {
+	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	in.Name = strings.TrimSpace(in.Name)
 	if err := validateUser(in, false); err != nil {
 		return err
 	}
@@ -156,7 +160,7 @@ func (s *Store) AdminUpdateUser(ctx context.Context, actor, id string, in UserIn
 	if err = adminLock(ctx, tx, actor); err != nil {
 		return err
 	}
-	before, err := scanUser(tx.QueryRow(ctx, "SELECT "+userColumns+" FROM users WHERE id=$1 FOR UPDATE", id))
+	before, err := scanUser(tx.QueryRow(ctx, "SELECT "+userColumns+" FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -175,16 +179,23 @@ func (s *Store) AdminUpdateUser(ctx context.Context, actor, id string, in UserIn
 			return invalid("至少保留一名启用的管理员")
 		}
 	}
-	_, err = tx.Exec(ctx, "UPDATE users SET name=$2,role=$3,service_fee=$4,disabled=$5 WHERE id=$1", id, strings.TrimSpace(in.Name), in.Role, in.ServiceFee, in.Disabled)
+	if in.Email == "" {
+		in.Email = before.Email
+	} // Compatibility with existing permission-only callers.
+	_, err = tx.Exec(ctx, "UPDATE users SET name=$2,role=$3,service_fee=$4,disabled=$5,email=$6 WHERE id=$1", id, in.Name, in.Role, in.ServiceFee, in.Disabled, in.Email)
 	if err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23505" {
+			return invalid("邮箱已存在")
+		}
 		return err
 	}
-	if in.Disabled || in.Role != before.Role {
+	if in.Disabled || in.Role != before.Role || in.Email != before.Email {
 		if _, err = tx.Exec(ctx, "DELETE FROM sessions WHERE user_id=$1", id); err != nil {
 			return err
 		}
 	}
-	if err = audit(ctx, tx, actor, "user.update", id, map[string]any{"before": map[string]any{"name": before.Name, "role": before.Role, "service_fee": before.ServiceFee, "disabled": before.Disabled}, "after": map[string]any{"name": in.Name, "role": in.Role, "service_fee": in.ServiceFee, "disabled": in.Disabled}}); err != nil {
+	if err = audit(ctx, tx, actor, "user.update", id, map[string]any{"before": map[string]any{"email": before.Email, "name": before.Name, "role": before.Role, "service_fee": before.ServiceFee, "disabled": before.Disabled}, "after": map[string]any{"email": in.Email, "name": in.Name, "role": in.Role, "service_fee": in.ServiceFee, "disabled": in.Disabled}}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -205,7 +216,7 @@ func (s *Store) AdminPassword(ctx context.Context, actor, id, password string) e
 	if err = adminLock(ctx, tx, actor); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, "UPDATE users SET password_hash=$2 WHERE id=$1", id, string(hash))
+	tag, err := tx.Exec(ctx, "UPDATE users SET password_hash=$2 WHERE id=$1 AND deleted_at IS NULL", id, string(hash))
 	if err != nil {
 		return err
 	}
@@ -249,7 +260,7 @@ func (s *Store) AdminCredit(ctx context.Context, actor, id, key string, amount i
 		return err
 	}
 	var balance, frozen int64
-	err = tx.QueryRow(ctx, "SELECT balance,frozen FROM users WHERE id=$1 FOR UPDATE", id).Scan(&balance, &frozen)
+	err = tx.QueryRow(ctx, "SELECT balance,frozen FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id).Scan(&balance, &frozen)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -349,7 +360,7 @@ func (s *Store) Audits(ctx context.Context, page, size int) ([]Audit, int, error
 func (s *Store) AdminOverview(ctx context.Context, financial bool) (map[string]any, error) {
 	out := map[string]any{"provider_ready": s.ProviderReady(ctx)}
 	var users, refunds, active, done int
-	err := s.Pool.QueryRow(ctx, "SELECT (SELECT count(*) FROM users),(SELECT count(*) FROM refunds),(SELECT count(*) FROM refunds WHERE status IN ('queued','processing','verifying','attention')),(SELECT count(*) FROM refunds WHERE status='succeeded')").Scan(&users, &refunds, &active, &done)
+	err := s.Pool.QueryRow(ctx, "SELECT (SELECT count(*) FROM users WHERE deleted_at IS NULL),(SELECT count(*) FROM refunds),(SELECT count(*) FROM refunds WHERE status IN ('queued','processing','verifying','attention')),(SELECT count(*) FROM refunds WHERE status='succeeded')").Scan(&users, &refunds, &active, &done)
 	if err != nil {
 		return nil, err
 	}

@@ -229,8 +229,21 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, name string) err
 	if err != nil {
 		return err
 	}
-	_, err = s.Pool.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,'admin') ON CONFLICT(email) DO NOTHING", ID(), strings.ToLower(strings.TrimSpace(email)), name, string(hash))
-	return err
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(718374022)"); err != nil {
+		return err
+	}
+	// Bootstrap only once. Editing an administrator's email must not recreate
+	// the old login from environment variables on the next application restart.
+	_, err = tx.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role) SELECT $1,$2,$3,$4,'admin' WHERE NOT EXISTS(SELECT 1 FROM users WHERE role='admin') ON CONFLICT(email) DO NOTHING", ID(), strings.ToLower(strings.TrimSpace(email)), name, string(hash))
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 const userColumns = "id,email,name,balance,frozen,service_fee,role,disabled"
@@ -242,11 +255,11 @@ func scanUser(row pgx.Row) (User, error) {
 	return u, err
 }
 func (s *Store) User(ctx context.Context, id string) (User, error) {
-	return scanUser(s.Pool.QueryRow(ctx, "SELECT "+userColumns+" FROM users WHERE id=$1 AND NOT disabled", id))
+	return scanUser(s.Pool.QueryRow(ctx, "SELECT "+userColumns+" FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL", id))
 }
 func (s *Store) Login(ctx context.Context, email, password string) (User, error) {
 	var hash, id string
-	err := s.Pool.QueryRow(ctx, "SELECT id,password_hash FROM users WHERE email=$1 AND NOT disabled", strings.ToLower(strings.TrimSpace(email))).Scan(&id, &hash)
+	err := s.Pool.QueryRow(ctx, "SELECT id,password_hash FROM users WHERE email=$1 AND NOT disabled AND deleted_at IS NULL", strings.ToLower(strings.TrimSpace(email))).Scan(&id, &hash)
 	// Always perform a bcrypt comparison, even for unknown users.
 	if err != nil {
 		hash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
@@ -264,6 +277,13 @@ func (s *Store) NewSession(ctx context.Context, uid string) (string, error) {
 		return "", err
 	}
 	defer tx.Rollback(ctx)
+	var activeID string
+	if err = tx.QueryRow(ctx, "SELECT id FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL FOR UPDATE", uid).Scan(&activeID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
+		return "", err
+	}
 	_, err = tx.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()")
 	if err == nil {
 		_, err = tx.Exec(ctx, "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,$3)", Hash(token), uid, time.Now().Add(7*24*time.Hour))
@@ -364,7 +384,10 @@ func (s *Store) CreateRefunds(ctx context.Context, uid, key string, accounts []r
 		return nil, false, err
 	}
 	var balance, frozen, fee int64
-	if err = tx.QueryRow(ctx, "SELECT balance,frozen,service_fee FROM users WHERE id=$1 FOR UPDATE", uid).Scan(&balance, &frozen, &fee); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT balance,frozen,service_fee FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL FOR UPDATE", uid).Scan(&balance, &frozen, &fee); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, ErrForbidden
+		}
 		return nil, false, err
 	}
 	var oldHash string
@@ -507,7 +530,10 @@ func (s *Store) Credit(ctx context.Context, email string, amount int64, note str
 	defer tx.Rollback(ctx)
 	var id string
 	var balance int64
-	if err = tx.QueryRow(ctx, "UPDATE users SET balance=balance+$2 WHERE email=$1 RETURNING id,balance", strings.ToLower(strings.TrimSpace(email)), amount).Scan(&id, &balance); err != nil {
+	if err = tx.QueryRow(ctx, "UPDATE users SET balance=balance+$2 WHERE email=$1 AND deleted_at IS NULL RETURNING id,balance", strings.ToLower(strings.TrimSpace(email)), amount).Scan(&id, &balance); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		return err
 	}
 	_, err = tx.Exec(ctx, "INSERT INTO ledger(user_id,kind,amount,balance_after,note) VALUES($1,'credit',$2,$3,$4)", id, amount, balance, note)
@@ -563,7 +589,11 @@ func (s *Store) CreateKey(ctx context.Context, uid, name string) (string, error)
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", uid); err != nil {
+	var activeID string
+	if err = tx.QueryRow(ctx, "SELECT id FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL FOR UPDATE", uid).Scan(&activeID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrForbidden
+		}
 		return "", err
 	}
 	var count int

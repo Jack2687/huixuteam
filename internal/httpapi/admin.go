@@ -3,6 +3,7 @@ package httpapi
 import (
 	"llm-refund/internal/store"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -49,15 +50,27 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 	}))
 	m.Handle("PATCH /api/admin/users/{id}", s.require("admin.users.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name       string `json:"name"`
-			Role       string `json:"role"`
-			ServiceFee int64  `json:"service_fee"`
-			Disabled   bool   `json:"disabled"`
+			Email      *string `json:"email"`
+			Name       string  `json:"name"`
+			Role       string  `json:"role"`
+			ServiceFee int64   `json:"service_fee"`
+			Disabled   bool    `json:"disabled"`
 		}
 		if !decode(w, r, &body) {
 			return
 		}
-		s.result(w, map[string]bool{"ok": true}, s.DB.AdminUpdateUser(r.Context(), current(r).ID, r.PathValue("id"), store.UserInput{Name: body.Name, Role: body.Role, ServiceFee: body.ServiceFee, Disabled: body.Disabled}))
+		email := ""
+		if body.Email != nil {
+			email = strings.TrimSpace(*body.Email)
+			if email == "" {
+				fail(w, 400, "邮箱不能为空")
+				return
+			}
+		}
+		s.result(w, map[string]bool{"ok": true}, s.DB.AdminUpdateUser(r.Context(), current(r).ID, r.PathValue("id"), store.UserInput{Email: email, Name: body.Name, Role: body.Role, ServiceFee: body.ServiceFee, Disabled: body.Disabled}))
+	}))
+	m.Handle("DELETE /api/admin/users/{id}", s.require("admin.users.manage", func(w http.ResponseWriter, r *http.Request) {
+		s.result(w, map[string]bool{"ok": true}, s.DB.AdminDeleteUser(r.Context(), current(r).ID, r.PathValue("id")))
 	}))
 	m.Handle("POST /api/admin/users/{id}/password", s.require("admin.users.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
