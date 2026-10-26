@@ -31,13 +31,14 @@ docker compose -p huixuteam -f compose.production.yml up -d --no-deps --no-build
 
 1. 本地完成必要测试并推送 GitHub；服务器仅在此目录 `git pull --ff-only`。
 2. 原服务运行时先构建新版本镜像，保存旧镜像标签。数据库和 `.env` 备份放受保护目录。
-3. 只在本项目 Compose 中更新 app：
+3. **重建前检查业务是否空闲**：查询 processing/verifying 申请和未释放且未过期的执行租约。有正在办理的任务时等待其完成，不强制重启或取消申请。构建完成后、实际切换前再次检查；若持续有新任务，安排暂停领取新申请并记录原开关，确认在途任务结束后再切换，验证后恢复原设置。排队记录和预留积分保留，不清空队列。
+4. 只在本项目 Compose 中更新 app：
 
 ```sh
 docker compose -p huixuteam -f compose.production.yml up -d --no-deps --no-build --force-recreate app
 ```
 
-4. 核验 `http://127.0.0.1:7825/health/live`、`/health/ready`、版本标签、页面资源和日志，并比对其他容器仍未变化。
-5. 不执行全局 Docker 清理、全局重启、删除数据卷或修改其他项目 Compose。失败时恢复旧应用镜像，不用旧数据库覆盖新业务数据。
+5. 核验 `http://127.0.0.1:7825/health/live`、`/health/ready`、版本标签、页面资源和日志，并比对其他容器仍未变化。
+6. 不执行全局 Docker 清理、全局重启、删除数据卷或修改其他项目 Compose。失败时恢复旧应用镜像，不用旧数据库覆盖新业务数据。
 
 不对真实客户执行测试退款。代理、母号校验仅通过明确操作发起只读请求；自动办理保持用户设置。
