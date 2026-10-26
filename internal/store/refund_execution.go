@@ -34,7 +34,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		return nil, err
 	}
 	var cfg RefundSettings
-	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,'') FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID, &cfg.MotherIntervalSeconds); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled {
@@ -90,7 +90,13 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 	}
 	if !existing {
-		err = tx.QueryRow(ctx, `SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id WHERE m.enabled AND p.enabled AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.mother_id=m.id AND NOT e.released) ORDER BY m.updated_at,m.id LIMIT 1`).Scan(&job.Mother.ID)
+		// Only new reservations wait. Persisted completion times survive restarts;
+		// the latest setting also applies to mothers already between requests.
+		err = tx.QueryRow(ctx, `SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
+			WHERE m.enabled AND p.enabled
+			AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.mother_id=m.id AND NOT e.released)
+			AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.mother_id=m.id AND e.completed_at>now()-($1 * interval '1 second'))
+			ORDER BY m.updated_at,m.id LIMIT 1`, cfg.MotherIntervalSeconds).Scan(&job.Mother.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}

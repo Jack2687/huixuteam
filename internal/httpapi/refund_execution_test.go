@@ -58,6 +58,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 	}
 	for _, cookie := range []string{member, operator} {
 		request("GET", "/api/admin/refund-settings", "", cookie, 403)
+		request("PUT", "/api/admin/refund-settings", `{"mother_interval_seconds":30}`, cookie, 403)
 		request("POST", "/api/admin/refund-mothers", `{}`, cookie, 403)
 		request("POST", "/api/admin/refund-mothers/preview", `{"session":"private"}`, cookie, 403)
 		request("POST", "/api/admin/refund-mothers/check", `{}`, cookie, 403)
@@ -81,6 +82,15 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 	request("PUT", "/api/admin/refund-settings", `{"enabled":true,"max_parallel":2,"max_attempts":2,"retry_seconds":30}`, ad, 400)
 	s.SetRefundRuntimeAvailable(true)
 	request("PUT", "/api/admin/refund-settings", `{"enabled":true,"max_parallel":2,"max_attempts":2,"retry_seconds":30,"child_proxy_id":"`+created.ID+`"}`, ad, 200)
+	request("PUT", "/api/admin/refund-settings", `{"mother_interval_seconds":45}`, ad, 200)
+	request("PUT", "/api/admin/refund-settings", `{"retry_seconds":10}`, ad, 200)
+	for _, body := range []string{`{"mother_interval_seconds":-1}`, `{"mother_interval_seconds":86401}`, `{"mother_interval_seconds":1.5}`} {
+		request("PUT", "/api/admin/refund-settings", body, ad, 400)
+	}
+	cfg, err := s.RefundSettings(ctx)
+	if err != nil || cfg.MotherIntervalSeconds != 45 {
+		t.Fatal("partial settings update reset interval", cfg, err)
+	}
 	s.Credit(ctx, u.Email, 9000, "test funding")
 	ids, _, err := s.CreateRefunds(ctx, u.ID, "http-execution-test", []refundprovider.Account{{Email: "customer@test.invalid", Password: "private-child-password", TOTPSecret: "JBSWY3DPEHPK3PXP"}})
 	if err != nil {

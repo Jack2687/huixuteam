@@ -8,9 +8,9 @@ import RefundDetail from "./RefundDetail.vue";
 type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
 type Mother = { check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
 type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
-type Settings = { enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string };
+type Settings = { enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
 const emit=defineEmits<{toast:[message:string]}>();
-const settings=ref<Settings>({enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:""});
+const settings=ref<Settings>({enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
 const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
 const mother=ref<Mother>({id:"",name:"",email:"",team_id:"",proxy_id:"",seat_type:"default",enabled:true,has_secret:false,access_token:""});
 const proxy=ref<ProxyRow>({id:"",name:"",url:"",enabled:true,has_secret:false});
@@ -100,10 +100,12 @@ onMounted(load);
      <label>并行母号上限<input v-model.number="settings.max_parallel" type="number" min="1" max="8" required/></label>
      <label>尝试次数上限<input v-model.number="settings.max_attempts" type="number" min="1" max="3" required/></label>
      <label>重试间隔（秒）<input v-model.number="settings.retry_seconds" type="number" min="5" max="300" required/></label>
+     <label>同母号接单间隔（秒）<input v-model.number="settings.mother_interval_seconds" type="number" min="0" max="86400" step="1" required/></label>
     </div>
     <label>子号全局代理<select v-model="settings.child_proxy_id" :required="settings.enabled"><option value="">请选择子号全局代理</option><option v-for="p in proxies" :key="p.id" :value="p.id" :disabled="!p.enabled">{{p.name}}{{p.enabled?'':'（已停用）'}}</option></select></label>
     <p class="muted">子号的全部请求固定使用全局代理，母号请求使用各自绑定的专属代理。修改全局选择只影响新申请，已领取的申请保留原出口；缺少可用代理时保留排队，不直连。</p>
     <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；结果待核实的请求不会自动重复发送。</p>
+    <p class="muted">接单间隔从同母号上一单成功完成后开始计算，默认 0 秒，不额外等待。保存后对正在等待的母号立即生效；到期后在下一轮调度（约 2 秒内）接单，其他空闲母号照常办理，已开始的任务及续跑不受影响。</p>
     <button class="button primary" :disabled="busy">应用调度配置</button>
    </form>
   </section>

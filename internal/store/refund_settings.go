@@ -15,11 +15,12 @@ import (
 )
 
 type RefundSettings struct {
-	ChildProxyID  string `json:"child_proxy_id"`
-	Enabled       bool   `json:"enabled"`
-	MaxParallel   int    `json:"max_parallel"`
-	LoginAttempts int    `json:"max_attempts"`
-	RetrySeconds  int    `json:"retry_seconds"`
+	ChildProxyID          string `json:"child_proxy_id"`
+	Enabled               bool   `json:"enabled"`
+	MaxParallel           int    `json:"max_parallel"`
+	LoginAttempts         int    `json:"max_attempts"`
+	RetrySeconds          int    `json:"retry_seconds"`
+	MotherIntervalSeconds int    `json:"mother_interval_seconds"`
 }
 type RefundProxy struct {
 	Check     *ResourceCheck `json:"check,omitempty"`
@@ -74,7 +75,7 @@ func (s *Store) openSecret(id string, data []byte, value any) error {
 }
 func (s *Store) RefundSettings(ctx context.Context) (RefundSettings, error) {
 	var v RefundSettings
-	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,'') FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID)
+	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID, &v.MotherIntervalSeconds)
 	return v, err
 }
 func (s *Store) ProviderReady(ctx context.Context) bool {
@@ -88,6 +89,9 @@ func (s *Store) ProviderReady(ctx context.Context) bool {
 func (s *Store) SetRefundRuntimeAvailable(v bool) { s.runtimeReady.Store(v) }
 func (s *Store) RefundRuntimeAvailable() bool     { return s.runtimeReady.Load() }
 func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSettings) error {
+	if v.MotherIntervalSeconds < 0 || v.MotherIntervalSeconds > 86400 {
+		return invalid("同母号接单间隔须为 0～86400 秒")
+	}
 	if v.MaxParallel < 1 || v.MaxParallel > 8 || v.LoginAttempts < 1 || v.LoginAttempts > 3 || v.RetrySeconds < 5 || v.RetrySeconds > 300 {
 		return invalid("并行母号 1～8，最多尝试 1～3，重试间隔 5～300 秒")
 	}
@@ -124,7 +128,7 @@ func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSe
 			return invalid("请先配置并启用母号与代理")
 		}
 	}
-	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID)
+	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),mother_interval_seconds=$6,updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID, v.MotherIntervalSeconds)
 	if err == nil {
 		err = audit(ctx, tx, actor, "refund.settings", "settings", v)
 	}

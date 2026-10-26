@@ -191,7 +191,7 @@ function download() {
               <td class="muted">
                 {{
                   row.status === "queued"
-                    ? "等待安排"
+                    ? "排队等待自动处理"
                     : statuses[row.status]?.label
                 }}
               </td>

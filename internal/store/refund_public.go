@@ -17,12 +17,13 @@ func publicProgress(message string) bool {
 	}
 }
 func publicRefundMessage(status, message string) string {
+	if status == "queued" {
+		return "申请正在排队，系统将自动安排处理，无需重复提交；开始处理前可撤回。"
+	}
 	if publicProgress(message) {
 		return message
 	}
 	switch status {
-	case "queued":
-		return "申请已受理"
 	case "processing", "verifying":
 		return "开始处理"
 	case "succeeded":

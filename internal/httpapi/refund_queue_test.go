@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"llm-refund/internal/httpapi"
 	"llm-refund/internal/store"
 	"llm-refund/internal/testutil"
@@ -78,6 +79,28 @@ func TestPageAndAPISharePersistentQueueWithoutAvailableMother(t *testing.T) {
 	must(err)
 	if total != 2 || len(items) != 2 {
 		t.Fatal("submission lost", total)
+	}
+	for _, path := range []string{"/api/refunds/", "/open/v1/requests/"} {
+		req, err := http.NewRequest("GET", server.URL+path+items[0].ID, nil)
+		must(err)
+		if strings.HasPrefix(path, "/api/") {
+			req.AddCookie(&http.Cookie{Name: "refund_session", Value: cookie})
+		} else {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		resp, err := server.Client().Do(req)
+		must(err)
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		must(err)
+		if resp.StatusCode != 200 || !strings.Contains(string(raw), "申请正在排队") || !strings.Contains(string(raw), "开始处理前可撤回") {
+			t.Fatal("missing customer queue explanation", string(raw))
+		}
+		for _, secret := range []string{"mother", "proxy", "team_id", "export_and_deactivate", "母号", "团队", "代理"} {
+			if strings.Contains(string(raw), secret) {
+				t.Fatal("queue explanation leaked internal resource", secret)
+			}
+		}
 	}
 	owner, err := s.User(ctx, u.ID)
 	must(err)

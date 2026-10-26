@@ -154,7 +154,7 @@ try:
     fill('兑换码', code); click('兑换到本账户'); expect('已使用过此兑换码')
     click('申请记录'); click('提交申请'); fill('服务账号邮箱', 'refund-ui@example.test'); fill('服务账号密码', 'Dummy-Account-Password'); fill('验证器密钥（2FA）', 'JBSWY3DPEHPK3PXP')
     batch(['check', ref('我有权使用以上账号，并授权服务方使用所填资料办理本次退款服务。', 'checkbox')])
-    click('确认提交 1 笔'); expect('等待安排'); expect('refund-ui@example.test'); shot('refunds')
+    click('确认提交 1 笔'); expect('排队等待自动处理'); expect('refund-ui@example.test'); shot('refunds')
     click('查看 refund-ui@example.test 的申请'); expect('服务单详情'); expect('已冻结'); shot('detail')
     click('撤回申请'); click('确认撤回'); expect('已释放'); click('关闭')
     click('资金与账单'); expect('预留解除'); expect('100 分')
