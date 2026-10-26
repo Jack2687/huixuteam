@@ -3,7 +3,7 @@ import {onUnmounted,ref,watch} from 'vue';
 import {api} from '../lib/api';
 type Item={stage:string;attempt:number;status:string;started_at:string|null;finished_at:string|null;duration_seconds:number|null;reason:string};
 type Timeline={items:Item[];active:boolean;generated_at:string};
-const props=defineProps<{id:string}>();
+const props=defineProps<{id:string;status:string}>();
 const data=ref<Timeline>(),error=ref(''),loading=ref(false);
 let controller:AbortController|undefined,timer:ReturnType<typeof setTimeout>|undefined,sequence=0,disposed=false;
 function timestamp(value:string|null){return value?new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(value)):'未记录'}
@@ -18,7 +18,7 @@ async function load(background=false){
  catch(e){if(current===sequence&&(e as Error).name!=='AbortError')error.value='读取失败，请重新读取记录'}
  finally{if(current===sequence&&!disposed){loading.value=false;if(data.value?.active)timer=setTimeout(()=>load(true),10000)}}
 }
-watch(()=>props.id,()=>{data.value=undefined;load()},{immediate:true});
+watch(()=>[props.id,props.status],()=>{data.value=undefined;load()},{immediate:true});
 onUnmounted(()=>{disposed=true;sequence++;controller?.abort();clearTimeout(timer)});
 </script>
 <template>

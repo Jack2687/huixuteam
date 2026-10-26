@@ -91,7 +91,7 @@ onUnmounted(()=>clearInterval(timer));
       <div class="notice">
         <Icon name="Clock3" :size="17" /><span>{{ data.refund.message }}</span>
       </div>
-      <slot name="monitor" />
+      <slot name="monitor" :status="data.refund.status" />
       <h4>服务动态</h4>
       <div class="timeline">
         <div v-for="event in events" :key="event.id">

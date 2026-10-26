@@ -94,7 +94,7 @@ onUnmounted(()=>{sequence++;controller?.abort();clearInterval(timer);clearTimeou
    <Pagination v-model:page="page" v-model:size="size" :total="data?.total??0" label="申请全监控分页"/>
    <p class="monitor-note">办理历时包含待跟进期间；缺少历史开始记录时显示“—”。打开详情期间暂停列表自动刷新。</p>
   </section>
-  <RefundDetail v-if="detail" :key="detail" :id="detail" admin @close="detail='';load()" @changed="load();emit('changed')"><template #monitor><AdminRefundTimeline :id="detail"/></template></RefundDetail>
+  <RefundDetail v-if="detail" :key="detail" :id="detail" admin @close="detail='';load()" @changed="load();emit('changed')"><template #monitor="{status}"><AdminRefundTimeline :id="detail" :status="status"/></template></RefundDetail>
  </div>
 </template>
 

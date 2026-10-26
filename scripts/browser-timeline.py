@@ -42,7 +42,14 @@ try:
  assert all(set(row)=={'stage','attempt','status','started_at','finished_at','duration_seconds','reason'} for row in dto['items'])
  batch(['set','viewport','390','844']);assert not evaluate('document.documentElement.scrollWidth>innerWidth');shot('completed-mobile')
  click('关闭');batch(['set','viewport','1440','1100'])
- open_detail('attention');expect('待核实');shot('attention-desktop');click('关闭')
+ open_detail('attention');expect('待核实');shot('attention-desktop')
+ # Parent refresh after recovery must restart the child timeline reader. Only
+ # the displayed response is changed here; no business mutation or worker runs.
+ before=count('attention')
+ detail_path='/api/admin/refunds/'+fixture['attention']['id']
+ evaluate('window.beforeRecoveryFetch=window.fetch;window.fetch=async(url,options)=>{const r=await window.beforeRecoveryFetch(url,options);if(String(url)==='+json.dumps(detail_path)+'){const v=await r.json();v.refund.status="processing";return new Response(JSON.stringify(v),{status:200,headers:{"Content-Type":"application/json"}})}return r}')
+ click('读取最新动态');batch(['wait','300']);assert count('attention')>before,'recovery did not reload stage records'
+ evaluate('window.fetch=window.beforeRecoveryFetch');click('关闭')
  open_detail('legacy');expect('未记录');shot('legacy-desktop');click('关闭')
  open_detail('failed');expect('已结束');click('关闭')
  open_detail('queued');expect('排队中');click('关闭')
