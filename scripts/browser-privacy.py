@@ -150,7 +150,7 @@ try:
     assert request('/api/admin/reports/accounts')['status']==200
     click('服务资源与调度','tab');expect('单个母号依次办理');clean_page()
     assert json.loads(request('/api/admin/refund-settings')['data'])['settings']['enabled'] is False
-    click('申请清单','tab')
+    click('申请全监控','tab')
     for status in ('succeeded','attention'):
         evaluate('(()=>{const row=[...document.querySelectorAll("tbody tr")].find(r=>r.textContent.includes('+json.dumps(fixture[status]['email'])+'));if(!row)throw Error("fixture row missing");row.querySelector("button").click()})()')
         expect('服务单详情');clean_page();shot('admin-'+status);click('关闭')

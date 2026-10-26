@@ -17,6 +17,15 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 	})
 }
 func (s *Server) adminRoutes(m *http.ServeMux) {
+	m.Handle("GET /api/admin/refund-monitor", s.require("admin.refunds.read", func(w http.ResponseWriter, r *http.Request) {
+		p, size := pagination(r)
+		q := r.URL.Query()
+		if q.Get("size") == "" {
+			size = 100
+		}
+		data, err := s.DB.AdminRefundMonitor(r.Context(), store.RefundMonitorFilter{Query: q.Get("q"), Status: q.Get("status"), FeeStatus: q.Get("fee_status"), Start: q.Get("start"), End: q.Get("end"), Focus: q.Get("focus"), Sort: q.Get("sort"), Page: p, Size: size})
+		s.result(w, data, err)
+	}))
 	m.Handle("GET /api/admin/reports/accounts", s.require("admin.reports.read", func(w http.ResponseWriter, r *http.Request) {
 		p, size := pagination(r)
 		if r.URL.Query().Get("size") == "" {

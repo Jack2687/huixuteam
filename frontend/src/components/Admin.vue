@@ -4,9 +4,9 @@ import Icon from "./Icon.vue";
 import { requestID } from "../lib/request-id";
 import AdminAnnouncements from "./AdminAnnouncements.vue";
 import AdminAccountReports from "./AdminAccountReports.vue";
+import AdminRefundMonitor from "./AdminRefundMonitor.vue";
 import Modal from "./Modal.vue";
 import Pagination from "./Pagination.vue";
-import RefundDetail from "./RefundDetail.vue";
 const RefundExecutionSettings=defineAsyncComponent(()=>import("./RefundExecutionSettings.vue"));
 import {
   api,
@@ -14,9 +14,7 @@ import {
   date,
   copy,
   exportTXT,
-  statuses,
   type User,
-  type Refund,
   type Page,
 } from "../lib/api";
 type Code = {
@@ -46,7 +44,6 @@ type Redemption = {
   amount: number;
   created_at: string;
 };
-type ManagedRefund = Refund & { user_name: string; user_email: string };
 const props = defineProps<{ user: User }>();
 const emit = defineEmits<{ toast: [message: string]; changed: [] }>();
 const can = (permission: string) => props.user.permissions.includes(permission);
@@ -54,7 +51,7 @@ const allTabs = [
   { key: "overview", label: "运营概况", permission: "admin.overview.read" },
   { key: "reports", label: "账户报表", permission: "admin.reports.read" },
   { key: "users", label: "账户管理", permission: "admin.users.manage" },
-  { key: "refunds", label: "申请清单", permission: "admin.refunds.read" },
+  { key: "refunds", label: "申请全监控", permission: "admin.refunds.read" },
   { key: "execution", label: "服务资源与调度", permission: "admin.refund.execute" },
   { key: "announcements", label: "公告发布", permission: "admin.announcements.manage" },
   { key: "codes", label: "兑换码", permission: "admin.codes.manage" },
@@ -68,12 +65,10 @@ const tab = ref("overview"),
   size = ref(20),
   total = ref(0),
   search = ref(""),
-  status = ref(""),
   loading = ref(false),
   error = ref("");
 const overview = ref<Record<string, number | boolean>>({}),
   users = ref<User[]>([]),
-  refunds = ref<ManagedRefund[]>([]),
   codes = ref<Code[]>([]),
   redemptions = ref<Redemption[]>([]),
   audits = ref<Audit[]>([]);
@@ -95,7 +90,6 @@ const modal = ref(""),
   generated = ref<string[]>([]),
   busy = ref(false),
   formError = ref(""),
-  detailID = ref(""),
   confirmCode = ref<Code>();
 const selectedCodes = ref(new Map<string, boolean>());
 const deleteIDs = ref<string[]>([]);
@@ -148,8 +142,8 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports") return;
-    const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value, status: status.value })}`;
+    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds") return;
+    const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
     else {
@@ -158,9 +152,6 @@ async function load() {
       switch (tab.value) {
         case "users":
           users.value = data.items;
-          break;
-        case "refunds":
-          refunds.value = data.items;
           break;
         case "codes":
           codes.value = data.items;
@@ -186,11 +177,10 @@ watch(tab, () => {
   selectedCodes.value.clear();
   page.value = 1;
   search.value = "";
-  status.value = "";
   total.value = 0;
   load();
 });
-watch(() => [page.value, size.value, status.value], load);
+watch(() => [page.value, size.value], load);
 watch(search, () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
@@ -427,7 +417,7 @@ function codeState(code: Code) {
       <section
         v-for="metric in [
           { key: 'users', title: '账户数量' },
-          { key: 'refunds', title: '申请清单' },
+          { key: 'refunds', title: '申请全监控' },
           { key: 'active', title: '尚在办理' },
           { key: 'succeeded', title: '服务完成数' },
         ]"
@@ -496,6 +486,7 @@ function codeState(code: Code) {
   >
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAccountReports v-else-if="tab === 'reports'"/>
+  <AdminRefundMonitor v-else-if="tab === 'refunds'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <RefundExecutionSettings v-else-if="tab === 'execution'" @toast="emit('toast',$event)"/>
   <section v-else-if="tab === 'permissions'" class="table-card">
     <div class="section-title">
@@ -575,23 +566,8 @@ function codeState(code: Code) {
       <button class="button secondary danger" :disabled="!selectedCodes.size || busy" @click="deleteIDs = [...selectedCodes.keys()]; formError = ''">批量删除</button>
       <p v-if="hasLegacySelection" class="field-help">所选包含未保存完整码的历史兑换码，请取消选择这些历史码后导出。</p>
     </div>
-    <div v-if="tab === 'users' || tab === 'refunds'" class="admin-toolbar">
-      <input
-        v-model="search"
-        :aria-label="tab === 'users' ? '搜索用户' : '搜索所有申请'"
-        :placeholder="
-          tab === 'users' ? '搜索姓名或邮箱…' : '搜索服务账号、用户邮箱或编号…'
-        "
-      /><select
-        v-if="tab === 'refunds'"
-        v-model="status"
-        aria-label="管理办理状态"
-      >
-        <option value="">不限状态</option>
-        <option v-for="(state, key) in statuses" :key="key" :value="key">
-          {{ state.label }}
-        </option>
-      </select>
+    <div v-if="tab === 'users'" class="admin-toolbar">
+      <input v-model="search" aria-label="搜索用户" placeholder="搜索姓名或邮箱…" />
     </div>
     <div class="table-scroll">
       <table v-if="tab === 'users'">
@@ -637,43 +613,6 @@ function codeState(code: Code) {
                 </button>
                 <button class="text-button danger" :disabled="busy || u.id === user.id || u.frozen > 0" :title="u.id === user.id ? '不能删除当前登录账户' : u.frozen > 0 ? '请先处理已预留积分对应的申请' : '删除账户并保留历史账单'" @click="deleteUser = u; formError = ''">删除账户</button>
               </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <table v-if="tab === 'refunds'">
-        <thead>
-          <tr>
-            <th>服务账号</th>
-            <th>所属用户</th>
-            <th>状态</th>
-            <th>服务费</th>
-            <th>收件时间</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in refunds" :key="r.id">
-            <td>{{ r.email }}</td>
-            <td>
-              <div class="account-cell">
-                <div>
-                  <strong>{{ r.user_name }}</strong
-                  ><small>{{ r.user_email }}</small>
-                </div>
-              </div>
-            </td>
-            <td>
-              <span class="badge" :class="statuses[r.status]?.color">{{
-                statuses[r.status]?.label
-              }}</span>
-            </td>
-            <td>{{ money(r.fee) }} 分</td>
-            <td class="muted">{{ date(r.created_at) }}</td>
-            <td>
-              <button class="text-button" @click="detailID = r.id">
-                查看详情<Icon name="ChevronRight" :size="13" />
-              </button>
             </td>
           </tr>
         </tbody>
@@ -998,7 +937,6 @@ function codeState(code: Code) {
       </button>
     </footer></Modal
   >
-  <RefundDetail v-if="detailID" :id="detailID" admin @close="detailID = ''" />
   <Modal v-if="deleteUser" title="删除账户" :description="deleteUser.email" :busy="busy" @close="!busy && (deleteUser = undefined)">
     <div class="modal-body">
       <p>确定删除「{{ deleteUser.name }}」？删除后将从账户管理移除，全部登录会话和 API 密钥立即失效。</p>

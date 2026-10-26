@@ -130,3 +130,4 @@ ALTER TABLE refund_proxies ADD COLUMN IF NOT EXISTS check_json JSONB;
 
 ALTER TABLE refund_settings ADD COLUMN IF NOT EXISTS mother_interval_seconds INTEGER NOT NULL DEFAULT 0 CHECK(mother_interval_seconds BETWEEN 0 AND 86400);
 CREATE INDEX IF NOT EXISTS refund_execution_mother_completed ON refund_execution(mother_id,completed_at DESC) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS refund_events_public_time ON refund_events(refund_id,created_at) WHERE NOT internal;
