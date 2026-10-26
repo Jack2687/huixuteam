@@ -131,3 +131,47 @@ ALTER TABLE refund_proxies ADD COLUMN IF NOT EXISTS check_json JSONB;
 ALTER TABLE refund_settings ADD COLUMN IF NOT EXISTS mother_interval_seconds INTEGER NOT NULL DEFAULT 0 CHECK(mother_interval_seconds BETWEEN 0 AND 86400);
 CREATE INDEX IF NOT EXISTS refund_execution_mother_completed ON refund_execution(mother_id,completed_at DESC) WHERE completed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS refund_events_public_time ON refund_events(refund_id,created_at) WHERE NOT internal;
+
+CREATE TABLE IF NOT EXISTS risk_settings (
+ id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id), config JSONB NOT NULL DEFAULT '{}',
+ revision BIGINT NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO risk_settings(id) VALUES(true) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS risk_buckets (
+ id TEXT PRIMARY KEY, rule TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL,
+ label TEXT NOT NULL, user_id TEXT NOT NULL DEFAULT '', key_id TEXT NOT NULL DEFAULT '',
+ policy TEXT NOT NULL, mode TEXT NOT NULL, count BIGINT NOT NULL DEFAULT 0,
+ window_until TIMESTAMPTZ NOT NULL, blocked_until TIMESTAMPTZ,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS risk_buckets_expiry ON risk_buckets(blocked_until) WHERE blocked_until IS NOT NULL;
+CREATE TABLE IF NOT EXISTS risk_user_controls (
+ user_id TEXT PRIMARY KEY REFERENCES users(id), paused BOOLEAN NOT NULL DEFAULT false,
+ paused_until TIMESTAMPTZ, limits JSONB NOT NULL DEFAULT '{}', updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS risk_events (
+ id BIGSERIAL PRIMARY KEY, dedupe TEXT UNIQUE NOT NULL, category TEXT NOT NULL, kind TEXT NOT NULL,
+ severity TEXT NOT NULL, user_id TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT '',
+ key_id TEXT NOT NULL DEFAULT '', source_ip TEXT NOT NULL DEFAULT '', source_verified BOOLEAN NOT NULL DEFAULT false,
+ operation TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', rule TEXT NOT NULL DEFAULT '',
+ status INTEGER NOT NULL DEFAULT 0, occurrences BIGINT NOT NULL DEFAULT 1,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+ resolved_at TIMESTAMPTZ, resolved_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS risk_events_time ON risk_events(last_seen DESC,id DESC);
+CREATE INDEX IF NOT EXISTS risk_events_pending ON risk_events(last_seen DESC) WHERE resolved_at IS NULL AND severity<>'info';
+CREATE TABLE IF NOT EXISTS risk_traffic (
+ minute TIMESTAMPTZ NOT NULL, user_id TEXT NOT NULL DEFAULT '', key_id TEXT NOT NULL DEFAULT '',
+ operation TEXT NOT NULL, channel TEXT NOT NULL, status INTEGER NOT NULL,
+ requests BIGINT NOT NULL DEFAULT 0, duration_ms BIGINT NOT NULL DEFAULT 0,
+ PRIMARY KEY(minute,user_id,key_id,operation,channel,status)
+);
+CREATE TABLE IF NOT EXISTS risk_scan_state (
+ id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id), last_scan TIMESTAMPTZ NOT NULL DEFAULT 'epoch'
+);
+INSERT INTO risk_scan_state(id) VALUES(true) ON CONFLICT DO NOTHING;
+CREATE INDEX IF NOT EXISTS audit_logs_time ON audit_logs(created_at,id);
+CREATE TABLE IF NOT EXISTS risk_conditions (
+ id TEXT PRIMARY KEY, episode BIGINT NOT NULL DEFAULT 1, active BOOLEAN NOT NULL DEFAULT true,
+ seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

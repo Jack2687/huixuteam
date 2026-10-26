@@ -32,6 +32,8 @@ var ErrBalance = errors.New("可用积分不足，请联系服务专员充值")
 var ErrConflict = errors.New("幂等键已用于不同的申请内容")
 var ErrDuplicate = errors.New("账号已有正在处理的申请，请勿重复提交")
 var ErrState = errors.New("当前申请状态不支持此操作")
+var ErrSubmissionPaused = errors.New("当前账户暂不能提交新申请")
+
 var ErrForbidden = errors.New("没有执行此操作的权限")
 var ErrInvalid = errors.New("参数错误")
 
@@ -401,6 +403,13 @@ func (s *Store) CreateRefunds(ctx context.Context, uid, key string, accounts []r
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, err
+	}
+	var paused bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM risk_user_controls WHERE user_id=$1 AND paused AND (paused_until IS NULL OR paused_until>now()))", uid).Scan(&paused); err != nil {
+		return nil, false, err
+	}
+	if paused {
+		return nil, false, ErrSubmissionPaused
 	}
 	total := int64(len(accounts)) * fee
 	if balance-frozen < total {

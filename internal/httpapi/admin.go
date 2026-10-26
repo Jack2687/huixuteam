@@ -4,7 +4,6 @@ import (
 	"llm-refund/internal/store"
 	"net/http"
 	"strings"
-	"time"
 )
 
 func (s *Server) require(permission string, next http.HandlerFunc) http.Handler {
@@ -195,22 +194,6 @@ func (s *Server) redeem(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	key := "redeem:" + current(r).ID
-	s.mu.Lock()
-	now := time.Now()
-	a := s.attempts[key]
-	if now.After(a.until) {
-		a = attempt{until: now.Add(time.Minute)}
-	}
-	if a.count >= 20 {
-		s.mu.Unlock()
-		w.Header().Set("Retry-After", "60")
-		fail(w, 429, "兑换尝试过于频繁，请稍后重试")
-		return
-	}
-	a.count++
-	s.attempts[key] = a
-	s.mu.Unlock()
 	amount, err := s.DB.Redeem(r.Context(), current(r).ID, body.Code)
 	s.result(w, map[string]any{"amount": amount, "message": "兑换成功，积分已入账"}, err)
 }

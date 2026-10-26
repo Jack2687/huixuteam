@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
 import {
+  Settings,
+  ArrowLeft,
   Play,
   Pause,
   RotateCcw,
@@ -44,6 +46,8 @@ const props = withDefaults(defineProps<{ name: string; size?: number }>(), {
   size: 18,
 });
 const icons: Record<string, Component> = {
+  Settings,
+  ArrowLeft,
   Play,
   Pause,
   RotateCcw,

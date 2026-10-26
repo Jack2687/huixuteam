@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"llm-refund/internal/refundprovider"
@@ -20,19 +19,13 @@ import (
 )
 
 type userKey struct{}
-type attempt struct {
-	count int
-	until time.Time
-}
 type Server struct {
-	DB       *store.Store
-	Secure   bool
-	mu       sync.Mutex
-	attempts map[string]attempt
+	DB     *store.Store
+	Secure bool
 }
 
 func New(db *store.Store, secure bool) http.Handler {
-	s := &Server{DB: db, Secure: secure, attempts: map[string]attempt{}}
+	s := &Server{DB: db, Secure: secure}
 	m := http.NewServeMux()
 	m.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]string{"status": "ok"}) })
 	m.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +77,7 @@ func New(db *store.Store, secure bool) http.Handler {
 	s.adminRoutes(m)
 	s.executionRoutes(m)
 	s.announcementRoutes(m)
+	s.riskRoutes(m)
 	// Unknown API routes must never return an HTML 200 response.
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
 	m.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
@@ -104,6 +98,9 @@ func New(db *store.Store, secure bool) http.Handler {
 				permission := "admin.overview.read"
 				if strings.HasPrefix(path, "assets/admin-execution-") {
 					permission = "admin.refund.execute"
+				}
+				if strings.HasPrefix(path, "assets/admin-risk-") {
+					permission = "admin.risk.manage"
 				}
 				w.Header().Set("Cache-Control", "private, no-store")
 				w.Header().Set("Vary", "Cookie")
@@ -128,7 +125,7 @@ func New(db *store.Store, secure bool) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(b)
 	}))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.riskMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
@@ -154,7 +151,7 @@ func New(db *store.Store, secure bool) http.Handler {
 			}
 		}()
 		m.ServeHTTP(w, r)
-	})
+	}))
 }
 func current(r *http.Request) store.User { return r.Context().Value(userKey{}).(store.User) }
 func (s *Server) auth(key bool, next http.HandlerFunc) http.Handler {
@@ -179,6 +176,9 @@ func (s *Server) auth(key bool, next http.HandlerFunc) http.Handler {
 			fail(w, 401, "登录已过期或密钥已失效")
 			return
 		}
+		if !s.checkAuthenticatedRisk(w, r, u, token, key) {
+			return
+		}
 		next(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
 	})
 }
@@ -196,6 +196,8 @@ func (s *Server) result(w http.ResponseWriter, v any, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, store.ErrSubmissionPaused):
+		fail(w, 403, "当前账户暂不能提交新申请，已受理申请继续处理，请联系服务专员")
 	case errors.Is(err, store.ErrForbidden):
 		fail(w, 403, err.Error())
 	case errors.Is(err, store.ErrInvalid):
@@ -243,20 +245,30 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "邮箱或密码格式不正确")
 		return
 	}
-	key := loginAttemptKey(body.Email)
-	if retry := s.reserveLoginAttempt(key, time.Now()); retry > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(retry))
-		fail(w, 429, "此账号登录尝试过多，请 "+strconv.Itoa((retry+59)/60)+" 分钟后重试")
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	meta := riskMeta(r)
+	if meta == nil {
+		fail(w, 503, "服务暂时不可用")
+		return
+	}
+	meta.Observation.Account = safeLoginAccount(email)
+	identity := store.RiskIdentity{Type: "login", ID: email, Label: meta.Observation.Account}
+	if !s.applyRiskChecks(w, r, []store.RiskConsumption{{Rule: "login", Policy: meta.Config.Rules["login"], Identity: identity}}) {
 		return
 	}
 	u, err := s.DB.Login(r.Context(), body.Email, body.Password)
 	if err != nil {
+		meta.Kind = "login_failed"
 		fail(w, 401, "邮箱或密码不正确")
 		return
 	}
-	s.mu.Lock()
-	delete(s.attempts, key)
-	s.mu.Unlock()
+	meta.Kind = "login_success"
+	meta.Observation.UserID = u.ID
+	meta.Observation.Account = u.Email
+	if err = s.DB.ClearLoginRisk(r.Context(), email); err != nil {
+		s.result(w, nil, err)
+		return
+	}
 	token, err := s.DB.NewSession(r.Context(), u.ID)
 	if err != nil {
 		s.result(w, nil, err)
@@ -321,6 +333,11 @@ func (s *Server) createRefunds(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, replayed, err := s.DB.CreateRefunds(r.Context(), current(r).ID, key, body.Accounts)
 	if err != nil {
+		if errors.Is(err, store.ErrSubmissionPaused) {
+			if meta := riskMeta(r); meta != nil {
+				meta.Kind = "paused"
+			}
+		}
 		s.result(w, nil, err)
 		return
 	}

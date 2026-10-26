@@ -5,6 +5,7 @@ export default defineConfig({
   build: { outDir: '../webui/static', emptyOutDir: true, assetsDir: 'assets', sourcemap:false,
     rollupOptions:{output:{onlyExplicitManualChunks:true,manualChunks(id){
       const path=id.replaceAll('\\','/');
+      if(['/components/AdminRiskMonitor.vue','/components/RiskSettings.vue','/components/RiskCustomerEditor.vue','/lib/risk.ts'].some(p=>path.includes(p)))return 'admin-risk';
       if(path.includes('/components/RefundExecutionSettings.vue')||path.includes('/components/ResourceCheckSummary.vue')||path.includes('/components/AdminRefundExecution.vue'))return 'admin-execution';
       if(path.includes('/components/Admin.vue')||path.includes('/components/AdminAnnouncements.vue')||path.includes('/components/AdminAccountReports.vue')||path.includes('/components/AdminRefundMonitor.vue'))return 'admin-console';
     }}}

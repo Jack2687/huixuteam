@@ -8,6 +8,7 @@ import AdminRefundMonitor from "./AdminRefundMonitor.vue";
 import Modal from "./Modal.vue";
 import Pagination from "./Pagination.vue";
 const RefundExecutionSettings=defineAsyncComponent(()=>import("./RefundExecutionSettings.vue"));
+const AdminRiskMonitor=defineAsyncComponent(()=>import("./AdminRiskMonitor.vue"));
 import {
   api,
   money,
@@ -52,6 +53,7 @@ const allTabs = [
   { key: "reports", label: "账户报表", permission: "admin.reports.read" },
   { key: "users", label: "账户管理", permission: "admin.users.manage" },
   { key: "refunds", label: "申请全监控", permission: "admin.refunds.read" },
+  { key: "risk", label: "风控监控", permission: "admin.risk.manage" },
   { key: "execution", label: "服务资源与调度", permission: "admin.refund.execute" },
   { key: "announcements", label: "公告发布", permission: "admin.announcements.manage" },
   { key: "codes", label: "兑换码", permission: "admin.codes.manage" },
@@ -106,6 +108,7 @@ const roles: Record<string, string> = {
   member: "普通用户",
 };
 const actions: Record<string, string> = {
+  "risk.settings": "调整风控配置", "risk.customer": "调整客户风控", "risk.release": "解除访问限制", "risk.resolve": "处理风控事件", "risk.key_revoke": "撤销客户 API 密钥",
   "announcement.create": "撰写公告", "announcement.update": "调整公告", "announcement.delete": "移除公告",
   "user.create": "新增账户",
   "user.update": "调整账户资料与权限",
@@ -120,6 +123,7 @@ const actions: Record<string, string> = {
   "code.export": "导出兑换码",
 };
 const capabilities = [
+  ["风控监控、限流配置与限制解除", true, false, false],
   ["查看逐人资金与申请报表", true, false, false],
   ["编辑、发布与撤下平台公告", true, false, false],
   ["个人申请、账单和 API 密钥", true, true, true],
@@ -142,7 +146,7 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds") return;
+    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
     const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
@@ -487,6 +491,7 @@ function codeState(code: Code) {
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAccountReports v-else-if="tab === 'reports'"/>
   <AdminRefundMonitor v-else-if="tab === 'refunds'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
+  <AdminRiskMonitor v-else-if="tab === 'risk'" @toast="emit('toast',$event)"/>
   <RefundExecutionSettings v-else-if="tab === 'execution'" @toast="emit('toast',$event)"/>
   <section v-else-if="tab === 'permissions'" class="table-card">
     <div class="section-title">

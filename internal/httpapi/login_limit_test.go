@@ -4,10 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"llm-refund/internal/testutil"
 )
@@ -54,37 +51,4 @@ func TestLoginLimitIsolatesAccountsBehindSameProxy(t *testing.T) {
 		request(v.Email, "TestPassword-12345", "198.51.100.1", 200)
 	}
 	request(u.Email, "TestPassword-12345", "198.51.100.3", 429)
-}
-
-func TestLoginLimitWindowAndParallelReservations(t *testing.T) {
-	s := &Server{attempts: map[string]attempt{}}
-	now := time.Now()
-	key := loginAttemptKey("USER@example.test")
-	var accepted atomic.Int32
-	var wg sync.WaitGroup
-	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if s.reserveLoginAttempt(key, now) == 0 {
-				accepted.Add(1)
-			}
-		}()
-	}
-	wg.Wait()
-	if accepted.Load() != 10 {
-		t.Fatal("parallel attempts bypassed limit", accepted.Load())
-	}
-	if retry := s.reserveLoginAttempt(key, now.Add(14*time.Minute+30*time.Second)); retry != 30 {
-		t.Fatal("incorrect remaining window", retry)
-	}
-	if s.reserveLoginAttempt(key, now.Add(15*time.Minute)) != 0 {
-		t.Fatal("window did not expire")
-	}
-	if loginAttemptKey(" user@EXAMPLE.test ") != key {
-		t.Fatal("normalization differs from login")
-	}
-	if s.reserveLoginAttempt(loginAttemptKey("other@example.test"), now) != 0 {
-		t.Fatal("other account blocked")
-	}
 }
