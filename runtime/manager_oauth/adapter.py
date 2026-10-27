@@ -11,6 +11,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlsplit
 
 from . import bridge, upstream
+import diagnostics
 
 
 def cookie_snapshot(flow):
@@ -474,6 +475,7 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
                    "allow_redirects": bool(kwargs.get("allow_redirects", False)),
                    "timeout_seconds": kwargs.get("timeout", 60)}
         bridge.emit(stage, "request_start", "OAuth 请求开始", request=request)
+        diagnostics.request_event(diagnostics.stage(stage), "start")
         try:
             if self.is_chatgpt_at():
                 response = self._web_session_request(url, **kwargs)
@@ -481,6 +483,7 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
                 kwargs.pop("allow_redirects", None)
                 response = super().request(url, **kwargs)
         except Exception as exc:
+            diagnostics.request_event(diagnostics.stage(stage), "error", exc=exc, started=started)
             duration_ms = int((time.monotonic() - started) * 1000)
             if self.first_failed_request is None:
                 self.first_failed_request = {"request_id": request_id, "stage": stage, "http_status": 0,
@@ -490,6 +493,7 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
                         details={"request_id": request_id, "error": bridge.redact(exc)[:500], "error_type": type(exc).__name__}, level="error")
             raise
         self.last_status = response.status
+        diagnostics.request_event(diagnostics.stage(stage), "response", response=response, started=started)
         self.remember_response_auth_session(response)
         shape = response_shape(response, self)
         if response.status >= 400 and self.first_failed_request is None:
@@ -536,6 +540,7 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
         last_error = ""
         attempts = 3 if self.proxy_url else 2
         for attempt in range(attempts):
+            transport_started = time.monotonic()
             try:
                 response = self.web_session.request(
                     method,
@@ -555,6 +560,7 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
                 )
             except Exception as exc:
                 last_error = str(exc)
+                diagnostics.request_event(diagnostics.stage(url), "error", exc=exc, attempt=attempt+1, started=transport_started)
                 if attempt + 1 < attempts:
                     time.sleep(0.6 + attempt * 0.7)
                     continue

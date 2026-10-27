@@ -10,20 +10,21 @@ import (
 )
 
 type RefundJob struct {
-	MotherFingerprint string                 `json:"-"`
-	MotherAttemptKey  string                 `json:"-"`
-	RecoveryMode      string                 `json:"recovery_mode"`
-	PersonalBaseline  *PersonalSnapshot      `json:"personal_baseline"`
-	ID                string                 `json:"id"`
-	UserID            string                 `json:"-"`
-	LeaseToken        string                 `json:"-"`
-	Step              string                 `json:"step"`
-	ChildUserID       string                 `json:"child_user_id"`
-	Account           refundprovider.Account `json:"account"`
-	Mother            RefundMother           `json:"mother"`
-	ChildProxy        string                 `json:"child_proxy"`
-	MotherProxy       string                 `json:"mother_proxy"`
-	Settings          RefundSettings         `json:"settings"`
+	DiagnosticContext RefundDiagnosticContext `json:"-"`
+	MotherFingerprint string                  `json:"-"`
+	MotherAttemptKey  string                  `json:"-"`
+	RecoveryMode      string                  `json:"recovery_mode"`
+	PersonalBaseline  *PersonalSnapshot       `json:"personal_baseline"`
+	ID                string                  `json:"id"`
+	UserID            string                  `json:"-"`
+	LeaseToken        string                  `json:"-"`
+	Step              string                  `json:"step"`
+	ChildUserID       string                  `json:"child_user_id"`
+	Account           refundprovider.Account  `json:"account"`
+	Mother            RefundMother            `json:"mother"`
+	ChildProxy        string                  `json:"child_proxy"`
+	MotherProxy       string                  `json:"mother_proxy"`
+	Settings          RefundSettings          `json:"settings"`
 }
 
 // ClaimRefund serializes allocation in the database, not in process memory.
@@ -164,7 +165,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 	}
 	job.LeaseToken = Token()
-	if _, err = tx.Exec(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1", job.ID, job.LeaseToken, childProxyID); err != nil {
+	if err = tx.QueryRow(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1 RETURNING retry_count,verify_count,cleanup_count", job.ID, job.LeaseToken, childProxyID).Scan(&job.DiagnosticContext.Retry, &job.DiagnosticContext.Verify, &job.DiagnosticContext.Cleanup); err != nil {
 		return nil, err
 	}
 	var motherSecret, proxySecret, accountSecret []byte
@@ -181,6 +182,8 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 	if err = s.openSecret(job.ID, accountSecret, &job.Account); err != nil {
 		return nil, err
 	}
+	job.DiagnosticContext.Step, job.DiagnosticContext.Mode = job.Step, job.RecoveryMode
+	job.DiagnosticContext.MotherID, job.DiagnosticContext.MotherProxyID, job.DiagnosticContext.ChildProxyID = job.Mother.ID, job.Mother.ProxyID, childProxyID
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -195,11 +198,12 @@ func (s *Store) RenewRefundLease(ctx context.Context, j *RefundJob) error {
 }
 
 type Checkpoint struct {
-	Diagnostic *RefundDiagnostic `json:"diagnostic,omitempty"`
-	Baseline   *PersonalSnapshot `json:"baseline,omitempty"`
-	Method     string            `json:"method"`
-	TeamID     string            `json:"team_id"`
-	UserID     string            `json:"user_id"`
+	Diagnostics []RefundDiagnostic `json:"-"`
+	Diagnostic  *RefundDiagnostic  `json:"diagnostic,omitempty"`
+	Baseline    *PersonalSnapshot  `json:"baseline,omitempty"`
+	Method      string             `json:"method"`
+	TeamID      string             `json:"team_id"`
+	UserID      string             `json:"user_id"`
 }
 
 // Every upstream mutation is preceded by a committed checkpoint. Accepted facts

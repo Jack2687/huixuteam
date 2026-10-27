@@ -1,5 +1,6 @@
 """Pro-only Team login and export/deactivate; original login mechanics stay shared."""
 import time
+import diagnostics
 from urllib.parse import urlsplit, urljoin
 
 from . import bridge, upstream
@@ -94,6 +95,7 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         headers = {"Authorization": "Bearer " + token, "User-Agent": SAFARI_UA,
                    "Origin": "https://chatgpt.com", "Referer": "https://chatgpt.com", "oai-language": "zh-CN", "Accept": "application/json"}
         started = time.monotonic()
+        diagnostics.request_event("export", "start")
         try:
             # Deliberately bypass login request retries; exactly one destructive POST.
             resp = self.web_session.request("POST", EXPORT_URL, headers=headers,
@@ -103,6 +105,7 @@ class TeamProtocolLogin(ProjectProtocolLogin):
             network_code = getattr(exc, "code", 0)
             network_code = network_code if type(network_code) is int else 0
             diagnostic = {"code": "export_uncertain", "network_code": network_code,
+                          "evidence": diagnostics.exception_evidence(exc, "export")["evidence"],
                           "duration_ms": int((time.monotonic()-started)*1000)}
             # libcurl proxy/DNS/connect failures occur before the HTTPS request.
             # Timeouts (28), send/receive/TLS loss are deliberately NOT replayed.
@@ -116,7 +119,10 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         except (ValueError, TypeError):
             data = {}
         status = int(resp.status_code)
-        diagnostic = {"http_status": status, "duration_ms": int((time.monotonic()-started)*1000)}
+        error = data.get("error") if isinstance(data, dict) else None
+        upstream_code = error.get("code") if isinstance(error, dict) else ""
+        diagnostic = {"http_status": status, "duration_ms": int((time.monotonic()-started)*1000),
+                      "evidence": {"stage": "export", "side": "child", "event": "response", "upstream_code": upstream_code if isinstance(upstream_code, str) and upstream_code in diagnostics.REASONS else ("other" if upstream_code else "")}}
         if 200 <= status < 300 and isinstance(data, dict) and data.get("success") is True:
             bridge.call("merge_v2_accepted", diagnostic={"code": "export_accepted", **diagnostic})
             return {"success": True, "accepted": True, "http_status": status}
@@ -127,8 +133,8 @@ class TeamProtocolLogin(ProjectProtocolLogin):
             retry = code == "invalid_workspace_selected" or status in {401, 429}
             bridge.call("merge_v2_rejected", diagnostic={"code": "export_rejected", "retryable": retry, **diagnostic})
             return {"success": False, "retryable": retry, "error_code": "export_rejected", "http_status": status,
-                    "duration_ms": diagnostic["duration_ms"],
+                    "duration_ms": diagnostic["duration_ms"], "evidence": diagnostic["evidence"],
                     "error": f"导出停用被拒绝：HTTP {status}" + ("，需重新登录团队" if retry else "")}
         return {"success": False, "retryable": False, "error_code": "export_uncertain", "http_status": status,
-                "duration_ms": diagnostic["duration_ms"],
+                "duration_ms": diagnostic["duration_ms"], "evidence": diagnostic["evidence"],
                 "error": f"导出停用返回 HTTP {status}，未明确受理；保留团队成员，需人工核实"}

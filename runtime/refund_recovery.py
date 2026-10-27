@@ -1,5 +1,6 @@
 """Server-only, read-only reconciliation. Absence is never acceptance evidence."""
 import time
+import diagnostics
 
 
 class VerificationUnavailable(Exception):
@@ -9,6 +10,8 @@ class VerificationUnavailable(Exception):
 
 def personal_snapshot(flow, session):
     token, _ = flow.validate_team(session)
+    started = time.monotonic()
+    diagnostics.request_event("personal_check", "start")
     try:
         response = flow.web_session.get(
             "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27",
@@ -16,7 +19,9 @@ def personal_snapshot(flow, session):
                      "Origin": "https://chatgpt.com", "Referer": "https://chatgpt.com/"},
             timeout=45, allow_redirects=False)
     except Exception as exc:
+        diagnostics.request_event("personal_check", "error", exc=exc, started=started)
         raise VerificationUnavailable(network_code=getattr(exc, "code", 0)) from None
+    diagnostics.request_event("personal_check", "response", response=response, started=started)
     if response.status_code != 200:
         raise VerificationUnavailable(response.status_code)
     try:
@@ -77,9 +82,9 @@ def verify(job, checkpoint, login_factory, payload):
             current = personal_snapshot(flow, session)
             diagnostic = {"code": verification_code(job.get("personal_baseline"), current), "http_status": 200}
     except VerificationUnavailable as exc:
-        diagnostic = {"code": "verification_unavailable", "http_status": exc.status, "network_code": exc.network_code}
-    except Exception:
-        diagnostic = {"code": "verification_unavailable"}
+        diagnostic = {"code": "verification_unavailable", **diagnostics.failure(exc, "personal_check"), "http_status": exc.status, "network_code": exc.network_code}
+    except Exception as exc:
+        diagnostic = {"code": "verification_unavailable", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
     finally:
         if flow is not None:
             flow.close()

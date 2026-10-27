@@ -7,6 +7,7 @@ import json
 import sys
 import time
 import uuid
+import diagnostics
 from urllib.parse import quote, urlencode
 
 from curl_cffi import requests
@@ -66,13 +67,18 @@ class MotherClient:
         }
 
     def call(self, method, suffix, body=None, timeout=60):
+        operation = ("member_remove" if method == "DELETE" else "members_read") if suffix.startswith("/users") else ("invite_send" if method == "POST" else "invites_read")
+        started = time.monotonic()
+        diagnostics.request_event(operation, "start", side="mother")
         args = {"headers": self.headers, "timeout": timeout, "allow_redirects": False}
         if body is not None:
             args["json"] = body
         try:
             response = self.session.request(method, self.base + suffix, **args)
         except Exception as exc:
+            diagnostics.request_event(operation, "error", side="mother", exc=exc, started=started)
             raise UpstreamFailure("mother_network", network_code=getattr(exc,"code",0)) from None
+        diagnostics.request_event(operation, "response", side="mother", response=response, started=started)
         if not 200 <= response.status_code < 300:
             raise UpstreamFailure("mother_http", response.status_code)
         return response
@@ -162,6 +168,14 @@ class MotherClient:
 
 
 def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=CustomerLogin, sleep=time.sleep):
+    def emit_diagnostic(method, params):
+        # Observation only: no RPC acknowledgement and no database wait.
+        print(json.dumps({"type": "diagnostic", **params["diagnostic"]}), flush=True)
+    with diagnostics.capture(emit_diagnostic if checkpoint is rpc else checkpoint):
+        return _execute(job, checkpoint, mother_factory, login_factory, sleep)
+
+
+def _execute(job, checkpoint, mother_factory, login_factory, sleep):
     recovery = (job.get("settings", {}).get("recovery") or {}).get("enabled", False)
     mode = job.get("recovery_mode", "")
     step = job["step"]
@@ -220,17 +234,18 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                         from refund_recovery import personal_snapshot, VerificationUnavailable
                         try:
                             baseline = personal_snapshot(flow, session)
-                        except VerificationUnavailable:
+                        except VerificationUnavailable as exc:
+                            diagnostics.failure(exc, "personal_check")
                             baseline = {"id": "", "state": "unknown"}
                         checkpoint("personal_baseline", {"baseline": baseline})
                     result = flow.submit_export(session)
-                except NeedsVerification:
-                    return {"ok": False, "code": "extra_verification"}
-                except bridge.DeadAccountError:
-                    return {"ok": False, "code": "account_unavailable"}
+                except NeedsVerification as exc:
+                    return {"ok": False, "code": "extra_verification", **diagnostics.failure(exc, "email_verification", flow=flow)}
+                except bridge.DeadAccountError as exc:
+                    return {"ok": False, "code": "account_unavailable", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 except Exception as exc:
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
-                    result = {"success": False, "retryable": retry, "error_code": "login_failed"}
+                    result = {"success": False, "retryable": retry, "error_code": "login_failed", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
                     if flow is not None:
                         flow.close()
@@ -238,6 +253,7 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                     break
                 if accepted or not result.get("retryable") or attempt + 1 == attempts:
                     return {"ok": False, "code": result.get("error_code") or "login_failed", "http_status": result.get("http_status", 0),
+                            "evidence": result.get("evidence"),
                             **({"retryable": bool(result.get("retryable")), "network_code": result.get("network_code", 0), "duration_ms": result.get("duration_ms", 0)} if recovery else {})}
                 sleep(job["settings"]["retry_seconds"])
         if not accepted:
@@ -251,10 +267,12 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
     except StopProtocol:
         return {"ok": False, "code": "checkpoint_declined"}
     except UpstreamFailure as exc:
+        detail = diagnostics.failure(exc, "mother_operation", side="mother")
         return {"ok": False, "code": exc.code, "http_status": exc.status,
+                "evidence": detail["evidence"],
                 **({"network_code": exc.network_code, "retryable": exc.code in {"mother_network", "cleanup_pending"} or exc.status in {408, 429, 500, 502, 503, 504}} if recovery else {})}
-    except Exception:
-        return {"ok": False, "code": "protocol_failed"}
+    except Exception as exc:
+        return {"ok": False, "code": "protocol_failed", **diagnostics.failure(exc, "runtime", side="worker")}
     finally:
         if mother is not None:
             mother.session.close()

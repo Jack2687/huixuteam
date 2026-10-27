@@ -64,6 +64,13 @@ func protocolMessage(code string) string {
 	}
 }
 func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint func(store.Checkpoint) error) error {
+	observe, closeObservations := diagnosticQueue(j.ID, checkpoint)
+	defer closeObservations()
+	failure := func(reason string, code int) error {
+		d := store.RefundDiagnostic{Code: "protocol_failed", Evidence: &store.RefundEvidence{Stage: "runtime", Side: "worker", Event: "failure", Reason: reason, ExitCode: code}}
+		observe(d)
+		return &ProtocolError{Diagnostic: d.Sanitized()}
+	}
 	cmd := exec.CommandContext(ctx, p.Python, "-u", p.Script)
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1", "PYTHONIOENCODING=utf-8")
 	// Raw upstream output can contain cookies or credentials. Only allowlisted
@@ -71,21 +78,21 @@ func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint 
 	cmd.Stderr = io.Discard
 	input, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return failure("process_io", 0)
 	}
 	output, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return failure("process_io", 0)
 	}
 	if err = cmd.Start(); err != nil {
-		return errors.New("协议运行环境不可用，请管理员检查 Python 及依赖")
+		return failure("process_start", 0)
 	}
 	defer input.Close()
 	enc := json.NewEncoder(input)
 	if err = enc.Encode(j); err != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
-		return err
+		return failure("process_io", 0)
 	}
 	scan := bufio.NewScanner(output)
 	scan.Buffer(make([]byte, 4096), 1<<20)
@@ -95,33 +102,64 @@ func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint 
 		var m struct {
 			Type string `json:"type"`
 			store.Checkpoint
-			OK          bool   `json:"ok"`
-			Code        string `json:"code"`
-			HTTPStatus  int    `json:"http_status"`
-			NetworkCode int    `json:"network_code"`
-			DurationMS  int    `json:"duration_ms"`
-			Retryable   bool   `json:"retryable"`
+			OK          bool                  `json:"ok"`
+			Code        string                `json:"code"`
+			HTTPStatus  int                   `json:"http_status"`
+			NetworkCode int                   `json:"network_code"`
+			DurationMS  int                   `json:"duration_ms"`
+			Retryable   bool                  `json:"retryable"`
+			Evidence    *store.RefundEvidence `json:"evidence"`
 		}
 		if json.Unmarshal(scan.Bytes(), &m) != nil {
+			observe(store.RefundDiagnostic{Code: "protocol_failed", Evidence: &store.RefundEvidence{Stage: "runtime", Side: "worker", Event: "failure", Reason: "malformed_protocol"}})
 			cmd.Process.Kill()
 			break
 		}
 		switch m.Type {
+		case "diagnostic":
+			observe(store.RefundDiagnostic{Code: "protocol_trace", HTTPStatus: m.HTTPStatus, NetworkCode: m.NetworkCode, DurationMS: m.DurationMS, Evidence: m.Evidence})
 		case "checkpoint":
 			e := checkpoint(m.Checkpoint)
+			if e != nil {
+				observe(store.RefundDiagnostic{Code: "protocol_failed", Evidence: &store.RefundEvidence{Stage: "checkpoint", Side: "worker", Event: "failure", Reason: "checkpoint_failed"}})
+			}
 			if e = enc.Encode(map[string]bool{"ok": e == nil}); e != nil {
 				cmd.Process.Kill()
 			}
 		case "result":
 			gotResult = true
 			success = m.OK
-			diagnostic = (store.RefundDiagnostic{Code: m.Code, HTTPStatus: m.HTTPStatus, NetworkCode: m.NetworkCode, DurationMS: m.DurationMS, Retryable: m.Retryable}).Sanitized()
+			diagnostic = (store.RefundDiagnostic{Code: m.Code, HTTPStatus: m.HTTPStatus, NetworkCode: m.NetworkCode, DurationMS: m.DurationMS, Retryable: m.Retryable, Evidence: m.Evidence}).Sanitized()
+			if !success {
+				observe(diagnostic)
+			}
 		default:
 			cmd.Process.Kill()
 		}
 	}
 	waitErr := cmd.Wait()
-	if waitErr != nil || scan.Err() != nil || !gotResult || !success {
+	if ctx.Err() != nil {
+		reason := "cancelled"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			reason = "deadline"
+		}
+		return failure(reason, 0)
+	}
+	if waitErr != nil {
+		code := 0
+		var exit *exec.ExitError
+		if errors.As(waitErr, &exit) {
+			code = exit.ExitCode()
+		}
+		return failure("process_exit", code)
+	}
+	if scan.Err() != nil {
+		return failure("process_io", 0)
+	}
+	if !gotResult {
+		return failure("missing_result", 0)
+	}
+	if !success {
 		return &ProtocolError{Diagnostic: diagnostic}
 	}
 	return nil
@@ -155,7 +193,7 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 	}
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer func() { wg.Wait(); diagnosticWriters.Wait() }()
 	timer := time.NewTicker(2 * time.Second)
 	defer timer.Stop()
 	for {
@@ -205,6 +243,11 @@ func (w *Worker) Execute(parent context.Context, j *store.RefundJob) {
 		}
 	}()
 	err := w.Runner.Run(ctx, j, func(c store.Checkpoint) error {
+		if c.Method == "diagnostic_batch" {
+			writeCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+			defer stop()
+			return w.DB.AppendRefundDiagnostics(writeCtx, j, c.Diagnostics)
+		}
 		// Persist a late acceptance even on shutdown; it must not disappear with the
 		// cancelled HTTP/process context. All other steps respect cancellation.
 		callCtx := ctx

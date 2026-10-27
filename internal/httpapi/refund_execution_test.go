@@ -120,6 +120,9 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 	}
 	s.Pool.Exec(ctx, "INSERT INTO refund_events(refund_id,message) VALUES($1,'export_and_deactivate secret legacy row')", job.ID)
 	s.Pool.Exec(ctx, "UPDATE refunds SET message='export_and_deactivate raw upstream reply' WHERE id=$1", job.ID)
+	if err = s.AppendRefundDiagnostics(ctx, job, []store.RefundDiagnostic{{Code: "protocol_trace", HTTPStatus: 403, Evidence: &store.RefundEvidence{Stage: "csrf", Reason: "csrf_or_risk_blocked", Source: "adapter.py", Challenge: true}}}); err != nil {
+		t.Fatal(err)
+	}
 	for _, who := range []struct{ path, cookie string }{{"/api/refunds/", member}, {"/api/admin/refunds/", ad}, {"/api/admin/refunds/", operator}} {
 		body := request("GET", who.path+job.ID, "", who.cookie, 200)
 		for _, word := range []string{"export_and_deactivate", "merge_v2", "invited", "accepted_at", "internal_events", "execution", "secret-child-id", "停用", "团队", "登录"} {
@@ -148,10 +151,16 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		{"/open/v1/requests", "Bearer " + key}, {"/open/v1/requests/" + job.ID, "Bearer " + key},
 	} {
 		body := request("GET", who.path, "", who.credential, 200)
-		for _, word := range append(strings.Fields(private), "accepted_at", "child_user_id", "lease_token", "internal_events", "停用", "移出团队") {
+		for _, word := range append(strings.Fields(private), "accepted_at", "child_user_id", "lease_token", "internal_events", "停用", "移出团队", "csrf_or_risk_blocked", "adapter.py", "protocol_trace", "observed_at") {
 			if strings.Contains(string(body), word) {
 				t.Fatalf("private data in %s: %s", who.path, word)
 			}
+		}
+	}
+	privateTimeline := request("GET", "/api/admin/refunds/"+job.ID+"/timeline", "", ad, 200)
+	for _, word := range []string{"csrf_or_risk_blocked", "adapter.py", "protocol_trace", "observed_at", "evidence", "mother_id"} {
+		if strings.Contains(string(privateTimeline), word) {
+			t.Fatal("timeline leaked private diagnostics", word)
 		}
 	}
 	request("POST", "/api/admin/refunds/"+job.ID+"/resume", `{"action":"resume","note":"fixture recovery checked"}`, ad, 200)

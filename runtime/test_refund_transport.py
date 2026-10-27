@@ -187,7 +187,7 @@ class ProxyTransportTests(unittest.TestCase):
             result = runner.execute(value, lambda method, *args: checkpoints.append(method), sleep=lambda _: None)
         self.assertEqual(fixture.errors, [])
         self.assertEqual(result, {"ok": True})
-        self.assertEqual(checkpoints, ["inviting", "invited", "login", "merge_v2_ready", "merge_v2_submitting", "merge_v2_accepted", "removing", "completed"])
+        self.assertEqual([s for s in checkpoints if s != 'diagnostic'], ["inviting", "invited", "login", "merge_v2_ready", "merge_v2_submitting", "merge_v2_accepted", "removing", "completed"])
         self.assertIn("password_verify", fixture.sent_tokens)
         self.assertFalse(fixture.members)
         self.assertEqual(sum(path.endswith("export_and_deactivate") for _, _, path, _, _ in fixture.records), 1)

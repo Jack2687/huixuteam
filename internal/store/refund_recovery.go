@@ -37,14 +37,17 @@ func (v RefundRecoverySettings) Validate() error {
 // Internal, typed evidence only. Never persist response bodies, tokens, URLs,
 // headers, exception strings or arbitrary upstream error codes.
 type RefundDiagnostic struct {
-	Code        string `json:"code"`
-	HTTPStatus  int    `json:"http_status,omitempty"`
-	NetworkCode int    `json:"network_code,omitempty"`
-	DurationMS  int    `json:"duration_ms,omitempty"`
-	Retryable   bool   `json:"retryable,omitempty"`
+	ObservedAt  time.Time       `json:"observed_at,omitempty"`
+	Evidence    *RefundEvidence `json:"evidence,omitempty"`
+	Code        string          `json:"code"`
+	HTTPStatus  int             `json:"http_status,omitempty"`
+	NetworkCode int             `json:"network_code,omitempty"`
+	DurationMS  int             `json:"duration_ms,omitempty"`
+	Retryable   bool            `json:"retryable,omitempty"`
 }
 
 var recoveryReasons = map[string]string{
+	"protocol_trace":           "内部诊断记录",
 	"mother_preflight_auth":    "服务资源授权已失效，尚未开始办理",
 	"mother_preflight_failed":  "服务资源连接未通过，尚未开始办理",
 	"export_uncertain":         "处理结果未明确，正在核实",
@@ -77,6 +80,9 @@ var recoveryReasons = map[string]string{
 }
 
 func (d RefundDiagnostic) Sanitized() RefundDiagnostic {
+	if d.Evidence != nil {
+		d.Evidence = d.Evidence.Sanitized()
+	}
 	if _, ok := recoveryReasons[d.Code]; !ok {
 		d.Code = "protocol_failed"
 		d.Retryable = false
@@ -104,6 +110,9 @@ func (v PersonalSnapshot) Valid() bool {
 
 func recordDiagnostic(ctx context.Context, tx pgx.Tx, id string, d RefundDiagnostic) error {
 	d = d.Sanitized()
+	if d.ObservedAt.IsZero() {
+		d.ObservedAt = time.Now().UTC()
+	}
 	if _, err := tx.Exec(ctx, "INSERT INTO refund_execution_diagnostics(refund_id,diagnostic) VALUES($1,$2)", id, d); err != nil {
 		return err
 	}

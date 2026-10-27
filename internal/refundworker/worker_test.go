@@ -45,6 +45,9 @@ print(json.dumps({'type':'result','ok':ack['ok'],'code':'private-password'}),flu
 	j := &store.RefundJob{Mother: store.RefundMother{Name: "测试母号"}, Account: refundprovider.Account{Password: "private-password"}}
 	called := false
 	err = p.Run(ctx, j, func(c store.Checkpoint) error {
+		if c.Method == "diagnostic_batch" {
+			return nil
+		}
 		called = true
 		if c.Method != "merge_v2_ready" || c.TeamID != "team-fixture" || c.UserID != "child-user" {
 			t.Errorf("wrong checkpoint: %+v", c)

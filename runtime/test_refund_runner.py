@@ -16,7 +16,7 @@ class RunnerTests(unittest.TestCase):
         result=runner.execute(self.job(),lambda method,*a:steps.append(method),lambda _:mother,login)
         self.assertEqual(result['code'],'mother_preflight_auth')
         self.assertEqual(result['http_status'],401)
-        self.assertEqual(steps,[])
+        self.assertEqual([s for s in steps if s != 'diagnostic'],[])
         mother.invite.assert_not_called();mother.remove.assert_not_called();login.assert_not_called()
 
     def test_preflight_is_read_only_and_only_initial(self):
@@ -72,7 +72,7 @@ class RunnerTests(unittest.TestCase):
     def test_extra_verification_does_not_retry_or_leak(self):
         mother=Mock();login=Mock();login.login.side_effect=runner.NeedsVerification("private-password")
         result=runner.execute(self.job(),lambda *args:None,lambda j:mother,lambda *args:login)
-        self.assertEqual(result,{"ok":False,"code":"extra_verification"});login.login.assert_called_once();mother.remove.assert_not_called()
+        self.assertFalse(result['ok']);self.assertEqual(result['code'],'extra_verification');self.assertNotIn('private-password',str(result));login.login.assert_called_once();mother.remove.assert_not_called()
 
     def test_mother_targets_only_exact_child_and_no_blanket_cleanup(self):
         with patch.object(runner.requests,"Session") as factory:
@@ -99,7 +99,7 @@ class RunnerTests(unittest.TestCase):
     def test_removal_error_cannot_report_complete(self):
         mother=Mock();mother.remove.side_effect=runner.UpstreamFailure("mother_http",401);steps=[]
         result=runner.execute(self.job("accepted"),lambda method,*args:steps.append(method),lambda j:mother)
-        self.assertFalse(result["ok"]);self.assertEqual(steps,["removing"])
+        self.assertFalse(result["ok"]);self.assertEqual([s for s in steps if s != 'diagnostic'],["removing"])
 
     def test_partial_member_pages_do_not_skip_target(self):
         with patch.object(runner.requests,"Session"):
