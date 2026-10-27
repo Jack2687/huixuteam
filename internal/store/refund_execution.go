@@ -11,6 +11,7 @@ import (
 
 type RefundJob struct {
 	MotherFingerprint string                 `json:"-"`
+	MotherAttemptKey  string                 `json:"-"`
 	RecoveryMode      string                 `json:"recovery_mode"`
 	PersonalBaseline  *PersonalSnapshot      `json:"personal_baseline"`
 	ID                string                 `json:"id"`
@@ -116,7 +117,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
   SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
   WHERE m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now())
   AND (m.auth_failed_fingerprint IS NULL OR m.auth_failed_fingerprint<>md5(m.secret))
-  AND NOT (m.id=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
+  AND NOT ((m.id||':'||md5(m.secret)||':'||md5(p.secret))=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
   AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released)
   AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND done.completed_at>now()-($1 * interval '1 second'))
   ORDER BY m.updated_at,m.id LIMIT 1
@@ -167,7 +168,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		return nil, err
 	}
 	var motherSecret, proxySecret, accountSecret []byte
-	err = tx.QueryRow(ctx, `SELECT m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.secret,p.secret,r.credentials,md5(m.secret) FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id JOIN refunds r ON r.id=$2 WHERE m.id=$1`, job.Mother.ID, job.ID).Scan(&job.Mother.Name, &job.Mother.Email, &job.Mother.TeamID, &job.Mother.ProxyID, &job.Mother.SeatType, &motherSecret, &proxySecret, &accountSecret, &job.MotherFingerprint)
+	err = tx.QueryRow(ctx, `SELECT m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.secret,p.secret,r.credentials,md5(m.secret),m.id||':'||md5(m.secret)||':'||md5(p.secret) FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id JOIN refunds r ON r.id=$2 WHERE m.id=$1`, job.Mother.ID, job.ID).Scan(&job.Mother.Name, &job.Mother.Email, &job.Mother.TeamID, &job.Mother.ProxyID, &job.Mother.SeatType, &motherSecret, &proxySecret, &accountSecret, &job.MotherFingerprint, &job.MotherAttemptKey)
 	if err != nil {
 		return nil, err
 	}

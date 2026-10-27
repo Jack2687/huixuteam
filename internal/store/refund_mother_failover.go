@@ -58,8 +58,8 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	}
 	if _, err := tx.Exec(ctx, `UPDATE refund_execution SET released=true,lease_token='',lease_until=NULL,recovery_mode='mother_switch',
  next_attempt_at=now()+($2 * interval '1 second'),mother_switch_count=mother_switch_count+1,
- failed_mothers=array_append(failed_mothers,mother_id),recovery_started_at=COALESCE(recovery_started_at,now()),updated_at=now()
- WHERE refund_id=$1 AND child_user_id='' AND accepted_at IS NULL`, j.ID, cfg.RetrySeconds); err != nil {
+ failed_mothers=array_append(failed_mothers,$3),recovery_started_at=COALESCE(recovery_started_at,now()),updated_at=now()
+ WHERE refund_id=$1 AND child_user_id='' AND accepted_at IS NULL`, j.ID, cfg.RetrySeconds, j.MotherAttemptKey); err != nil {
 		return true, err
 	}
 	_, err := tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'资源暂不可用，已重新排队等待调度。',true)", j.ID)

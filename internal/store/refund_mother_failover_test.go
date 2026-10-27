@@ -205,10 +205,11 @@ func TestExpiredAndRejectedMothersSkippedUntilCredentialChanges(t *testing.T) {
 	if _, e = s.SaveRefundMother(ctx, a.ID, blocked); e != nil {
 		t.Fatal(e)
 	}
-	// A new request can use renewed credentials. The switched request still skips
-	// its already-tried mother and remains in the queue for another resource.
+	// Renewed credentials make the resource eligible again for the original
+	// waiting request; never permanently exclude a mother after it is repaired.
+	recoveryDue(t, s, j.ID)
 	next, e := s.ClaimRefund(ctx)
-	if e != nil || next == nil || next.ID == j.ID {
+	if e != nil || next == nil || next.ID != j.ID {
 		t.Fatal("renewed mother not usable", e)
 	}
 	// A fresh successful probe also clears the authorization quarantine.
