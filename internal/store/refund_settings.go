@@ -15,12 +15,13 @@ import (
 )
 
 type RefundSettings struct {
-	ChildProxyID          string `json:"child_proxy_id"`
-	Enabled               bool   `json:"enabled"`
-	MaxParallel           int    `json:"max_parallel"`
-	LoginAttempts         int    `json:"max_attempts"`
-	RetrySeconds          int    `json:"retry_seconds"`
-	MotherIntervalSeconds int    `json:"mother_interval_seconds"`
+	Recovery              *RefundRecoverySettings `json:"recovery"`
+	ChildProxyID          string                  `json:"child_proxy_id"`
+	Enabled               bool                    `json:"enabled"`
+	MaxParallel           int                     `json:"max_parallel"`
+	LoginAttempts         int                     `json:"max_attempts"`
+	RetrySeconds          int                     `json:"retry_seconds"`
+	MotherIntervalSeconds int                     `json:"mother_interval_seconds"`
 }
 type RefundProxy struct {
 	Check     *ResourceCheck `json:"check,omitempty"`
@@ -75,7 +76,7 @@ func (s *Store) openSecret(id string, data []byte, value any) error {
 }
 func (s *Store) RefundSettings(ctx context.Context) (RefundSettings, error) {
 	var v RefundSettings
-	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID, &v.MotherIntervalSeconds)
+	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID, &v.MotherIntervalSeconds, &v.Recovery)
 	return v, err
 }
 func (s *Store) ProviderReady(ctx context.Context) bool {
@@ -89,6 +90,11 @@ func (s *Store) ProviderReady(ctx context.Context) bool {
 func (s *Store) SetRefundRuntimeAvailable(v bool) { s.runtimeReady.Store(v) }
 func (s *Store) RefundRuntimeAvailable() bool     { return s.runtimeReady.Load() }
 func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSettings) error {
+	if v.Recovery != nil {
+		if err := v.Recovery.Validate(); err != nil {
+			return err
+		}
+	}
 	if v.MotherIntervalSeconds < 0 || v.MotherIntervalSeconds > 86400 {
 		return invalid("同母号接单间隔须为 0～86400 秒")
 	}
@@ -128,7 +134,7 @@ func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSe
 			return invalid("请先配置并启用母号与代理")
 		}
 	}
-	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),mother_interval_seconds=$6,updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID, v.MotherIntervalSeconds)
+	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),mother_interval_seconds=$6,recovery=COALESCE($7::jsonb,recovery),updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID, v.MotherIntervalSeconds, v.Recovery)
 	if err == nil {
 		err = audit(ctx, tx, actor, "refund.settings", "settings", v)
 	}
@@ -357,20 +363,21 @@ func (s *Store) DeleteRefundResource(ctx context.Context, actor, kind, id string
 }
 
 type Execution struct {
-	RefundID    string     `json:"refund_id"`
-	MotherID    string     `json:"mother_id,omitempty"`
-	Step        string     `json:"step"`
-	ChildUserID string     `json:"-"`
-	AcceptedAt  *time.Time `json:"accepted_at"`
-	CompletedAt *time.Time `json:"completed_at"`
-	LeaseToken  string     `json:"-"`
-	Running     bool       `json:"running"`
-	Released    bool       `json:"released"`
+	RecoveryMode string     `json:"-"`
+	RefundID     string     `json:"refund_id"`
+	MotherID     string     `json:"mother_id,omitempty"`
+	Step         string     `json:"step"`
+	ChildUserID  string     `json:"-"`
+	AcceptedAt   *time.Time `json:"accepted_at"`
+	CompletedAt  *time.Time `json:"completed_at"`
+	LeaseToken   string     `json:"-"`
+	Running      bool       `json:"running"`
+	Released     bool       `json:"released"`
 }
 
 func (s *Store) RefundExecution(ctx context.Context, id string) (*Execution, error) {
 	var v Execution
-	err := s.Pool.QueryRow(ctx, `SELECT refund_id,mother_id,step,child_user_id,accepted_at,completed_at,COALESCE(lease_until>now(),false),released FROM refund_execution WHERE refund_id=$1`, id).Scan(&v.RefundID, &v.MotherID, &v.Step, &v.ChildUserID, &v.AcceptedAt, &v.CompletedAt, &v.Running, &v.Released)
+	err := s.Pool.QueryRow(ctx, `SELECT refund_id,mother_id,step,child_user_id,accepted_at,completed_at,COALESCE(lease_until>now(),false),released,recovery_mode FROM refund_execution WHERE refund_id=$1`, id).Scan(&v.RefundID, &v.MotherID, &v.Step, &v.ChildUserID, &v.AcceptedAt, &v.CompletedAt, &v.Running, &v.Released, &v.RecoveryMode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

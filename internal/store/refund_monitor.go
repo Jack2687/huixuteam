@@ -13,6 +13,9 @@ type RefundMonitorFilter struct {
 }
 
 type RefundMonitorRow struct {
+	RecoveryAlert   bool       `json:"recovery_alert"`
+	RecoveryPending bool       `json:"recovery_pending"`
+	NextCheckAt     *time.Time `json:"next_check_at"`
 	AdminRefund
 	StartedAt     *time.Time `json:"started_at"`
 	FinishedAt    *time.Time `json:"finished_at"`
@@ -23,18 +26,20 @@ type RefundMonitorRow struct {
 }
 
 type RefundMonitorSummary struct {
-	Total       int   `json:"total"`
-	Queued      int   `json:"queued"`
-	Running     int   `json:"running"`
-	Attention   int   `json:"attention"`
-	Succeeded   int   `json:"succeeded"`
-	Failed      int   `json:"failed"`
-	Cancelled   int   `json:"cancelled"`
-	LongWait    int   `json:"long_wait"`
-	LongRunning int   `json:"long_running"`
-	Frozen      int64 `json:"frozen"`
-	Settled     int64 `json:"settled"`
-	Released    int64 `json:"released"`
+	RecoveryAlert   int   `json:"recovery_alert"`
+	RecoveryPending int   `json:"recovery_pending"`
+	Total           int   `json:"total"`
+	Queued          int   `json:"queued"`
+	Running         int   `json:"running"`
+	Attention       int   `json:"attention"`
+	Succeeded       int   `json:"succeeded"`
+	Failed          int   `json:"failed"`
+	Cancelled       int   `json:"cancelled"`
+	LongWait        int   `json:"long_wait"`
+	LongRunning     int   `json:"long_running"`
+	Frozen          int64 `json:"frozen"`
+	Settled         int64 `json:"settled"`
+	Released        int64 `json:"released"`
 }
 
 type RefundMonitor struct {
@@ -54,7 +59,7 @@ func (s *Store) AdminRefundMonitor(ctx context.Context, f RefundMonitorFilter) (
 	if len(f.Query) > 254 {
 		return out, invalid("搜索内容过长")
 	}
-	if !oneOf(f.Status, "", "queued", "running", "processing", "verifying", "attention", "succeeded", "failed", "banned", "cancelled", "abnormal", "unsuccessful") || !oneOf(f.FeeStatus, "", "frozen", "settled", "released") || !oneOf(f.Focus, "", "long_wait", "long_running") || !oneOf(f.Sort, "", "priority", "newest", "oldest", "updated") {
+	if !oneOf(f.Status, "", "queued", "running", "processing", "verifying", "attention", "succeeded", "failed", "banned", "cancelled", "abnormal", "unsuccessful") || !oneOf(f.FeeStatus, "", "frozen", "settled", "released") || !oneOf(f.Focus, "", "long_wait", "long_running", "recovery_alert") || !oneOf(f.Sort, "", "priority", "newest", "oldest", "updated") {
 		return out, invalid("监控筛选条件无效")
 	}
 	var from, until *time.Time
@@ -91,8 +96,11 @@ func (s *Store) AdminRefundMonitor(ctx context.Context, f RefundMonitorFilter) (
 	const query = `WITH scoped AS (
  SELECT r.id,r.email,r.status,r.fee,r.fee_status,r.message,r.created_at,r.updated_at,
  u.id AS user_id,u.name AS user_name,u.email AS user_email,p.started_at,
+ COALESCE(NOT e.released AND e.recovery_started_at<=now()-((cfg.recovery->>'alert_seconds')::int * interval '1 second'),false) AS recovery_alert,
+ COALESCE(NOT e.released AND e.recovery_mode<>'' AND ((e.next_attempt_at IS NOT NULL AND (cfg.recovery->>'enabled')::boolean) OR e.lease_until>now()),false) AS recovery_pending,
+ CASE WHEN NOT e.released AND (cfg.recovery->>'enabled')::boolean THEN e.next_attempt_at END AS next_check_at,
  CASE WHEN r.status IN ('succeeded','failed','banned','cancelled') THEN r.updated_at END AS finished_at
- FROM refunds r JOIN users u ON u.id=r.user_id
+ FROM refunds r JOIN users u ON u.id=r.user_id LEFT JOIN refund_execution e ON e.refund_id=r.id CROSS JOIN refund_settings cfg
  LEFT JOIN LATERAL (SELECT min(created_at) AS started_at FROM refund_events
  WHERE refund_id=r.id AND NOT internal AND message IN ('开始处理','正在继续处理')) p ON true
  WHERE ($1='' OR position(lower($1) in lower(r.email||' '||r.id||' '||u.name||' '||u.email))>0)
@@ -107,14 +115,14 @@ func (s *Store) AdminRefundMonitor(ctx context.Context, f RefundMonitorFilter) (
  FROM scoped
 ), filtered AS (
  SELECT * FROM measured WHERE ($4='' OR status=$4 OR ($4='running' AND status IN ('processing','verifying')) OR ($4='unsuccessful' AND status IN ('failed','banned')) OR ($4='abnormal' AND status IN ('attention','failed','banned')))
- AND ($5='' OR fee_status=$5) AND ($6='' OR ($6='long_wait' AND long_wait) OR ($6='long_running' AND long_running))
+ AND ($5='' OR fee_status=$5) AND ($6='' OR ($6='long_wait' AND long_wait) OR ($6='long_running' AND long_running) OR ($6='recovery_alert' AND recovery_alert))
 ), ordered AS (
  SELECT *,row_number() OVER (ORDER BY
- CASE WHEN $7 IN ('','priority') THEN CASE WHEN status='attention' THEN 0 WHEN long_running THEN 1 WHEN status IN ('processing','verifying') THEN 2 WHEN status='queued' THEN 3 ELSE 4 END END,
+ CASE WHEN $7 IN ('','priority') THEN CASE WHEN recovery_alert THEN -1 WHEN status='attention' THEN 0 WHEN long_running THEN 1 WHEN status IN ('processing','verifying') THEN 2 WHEN status='queued' THEN 3 ELSE 4 END END,
  CASE WHEN $7='oldest' OR ($7 IN ('','priority') AND status IN ('queued','processing','verifying','attention')) THEN created_at END ASC,
  CASE WHEN $7='updated' THEN updated_at END DESC,created_at DESC,id) AS rn FROM filtered
 ), summary AS (
- SELECT count(*) AS total,count(*) FILTER(WHERE status='queued') AS queued,
+ SELECT count(*) FILTER(WHERE recovery_alert) AS recovery_alert,count(*) FILTER(WHERE recovery_pending) AS recovery_pending,count(*) AS total,count(*) FILTER(WHERE status='queued') AS queued,
  count(*) FILTER(WHERE status IN ('processing','verifying')) AS running,count(*) FILTER(WHERE status='attention') AS attention,
  count(*) FILTER(WHERE status='succeeded') AS succeeded,count(*) FILTER(WHERE status IN ('failed','banned')) AS failed,
  count(*) FILTER(WHERE status='cancelled') AS cancelled,count(*) FILTER(WHERE long_wait) AS long_wait,count(*) FILTER(WHERE long_running) AS long_running,

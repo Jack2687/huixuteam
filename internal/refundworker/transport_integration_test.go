@@ -78,7 +78,7 @@ func TestDatabaseWorkerOriginalPythonAndActualProxyTransport(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if r.Status != "attention" || r.FeeStatus != "frozen" {
+				if (r.Status != "processing" && r.Status != "verifying") || r.FeeStatus != "frozen" {
 					t.Fatalf("failure settled prematurely: %+v", r)
 				}
 				x, err := s.RefundExecution(ctx, job.ID)
@@ -92,12 +92,29 @@ func TestDatabaseWorkerOriginalPythonAndActualProxyTransport(t *testing.T) {
 					if err := s.ResumeRefund(ctx, a.ID, job.ID, "resume", "fixture review"); err == nil {
 						t.Fatal("unknown submission resumed without verification")
 					}
+					if _, err = s.Pool.Exec(ctx, "UPDATE refund_execution SET next_attempt_at=now()-interval '1 second' WHERE refund_id=$1", job.ID); err != nil {
+						t.Fatal(err)
+					}
+					verification, err := s.ClaimRefund(ctx)
+					if err != nil || verification == nil || verification.RecoveryMode != "verify" {
+						t.Fatal("missing verification", err)
+					}
+					worker.Execute(ctx, verification)
+					view, err := s.AdminRefundRecovery(ctx, job.ID)
+					if err != nil || view.Checks != 1 || view.NextAt == nil {
+						t.Fatal("verification not scheduled", view, err)
+					}
+					r, _ = s.Refund(ctx, u.ID, job.ID)
+					if r.FeeStatus != "frozen" || r.Status != "verifying" {
+						t.Fatal("verification changed financial outcome", r)
+					}
 					return
 				}
 				if x.Step != "removing" {
 					t.Fatal("lost cleanup checkpoint", x.Step)
 				}
-				if err := s.ResumeRefund(ctx, a.ID, job.ID, "resume", "fixture connection restored"); err != nil {
+				// The scheduler resumes cleanup without an administrator action.
+				if _, err := s.Pool.Exec(ctx, "UPDATE refund_execution SET next_attempt_at=now()-interval '1 second' WHERE refund_id=$1", job.ID); err != nil {
 					t.Fatal(err)
 				}
 				job, err = s.ClaimRefund(ctx)

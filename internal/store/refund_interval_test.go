@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -21,7 +22,7 @@ func setMotherInterval(t *testing.T, s *store.Store, admin store.User, seconds i
 		t.Fatal(err)
 	}
 	got, err := s.RefundSettings(ctx)
-	if err != nil || got != cfg {
+	if err != nil || !reflect.DeepEqual(got, cfg) {
 		t.Fatal("settings not persisted", got, err)
 	}
 }

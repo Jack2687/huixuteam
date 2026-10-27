@@ -22,6 +22,10 @@ type Runner interface {
 }
 type ProtocolRunner struct{ Python, Script string }
 
+type ProtocolError struct{ Diagnostic store.RefundDiagnostic }
+
+func (e *ProtocolError) Error() string { return protocolMessage(e.Diagnostic.Code) }
+
 func DefaultRunner() ProtocolRunner {
 	python := os.Getenv("REFUND_PYTHON")
 	if python == "" {
@@ -86,13 +90,17 @@ func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint 
 	scan := bufio.NewScanner(output)
 	scan.Buffer(make([]byte, 4096), 1<<20)
 	var gotResult, success bool
-	message := protocolMessage("")
+	diagnostic := store.RefundDiagnostic{Code: "protocol_failed"}
 	for scan.Scan() {
 		var m struct {
 			Type string `json:"type"`
 			store.Checkpoint
-			OK   bool   `json:"ok"`
-			Code string `json:"code"`
+			OK          bool   `json:"ok"`
+			Code        string `json:"code"`
+			HTTPStatus  int    `json:"http_status"`
+			NetworkCode int    `json:"network_code"`
+			DurationMS  int    `json:"duration_ms"`
+			Retryable   bool   `json:"retryable"`
 		}
 		if json.Unmarshal(scan.Bytes(), &m) != nil {
 			cmd.Process.Kill()
@@ -107,14 +115,14 @@ func (p ProtocolRunner) Run(ctx context.Context, j *store.RefundJob, checkpoint 
 		case "result":
 			gotResult = true
 			success = m.OK
-			message = protocolMessage(m.Code)
+			diagnostic = (store.RefundDiagnostic{Code: m.Code, HTTPStatus: m.HTTPStatus, NetworkCode: m.NetworkCode, DurationMS: m.DurationMS, Retryable: m.Retryable}).Sanitized()
 		default:
 			cmd.Process.Kill()
 		}
 	}
 	waitErr := cmd.Wait()
 	if waitErr != nil || scan.Err() != nil || !gotResult || !success {
-		return errors.New(message)
+		return &ProtocolError{Diagnostic: diagnostic}
 	}
 	return nil
 }
@@ -205,19 +213,40 @@ func (w *Worker) Execute(parent context.Context, j *store.RefundJob) {
 			callCtx, stop = context.WithTimeout(context.Background(), 5*time.Second)
 			defer stop()
 		}
-		return w.DB.RefundCheckpoint(callCtx, j, c)
+		err := w.DB.RefundCheckpoint(callCtx, j, c)
+		// Retry only persistence of an observed acceptance, never its upstream POST.
+		for attempt := 0; c.Method == "merge_v2_accepted" && err != nil && !errors.Is(err, store.ErrState) && attempt < 2; attempt++ {
+			select {
+			case <-callCtx.Done():
+				return err
+			case <-time.After(200 * time.Millisecond):
+			}
+			err = w.DB.RefundCheckpoint(callCtx, j, c)
+		}
+		return err
 	})
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
 	state, readErr := w.DB.RefundExecution(finishCtx, j.ID)
-	if readErr == nil && state != nil && state.Step == "completed" {
+	if readErr == nil && state != nil && state.Released {
 		return
 	}
 	message := protocolMessage("")
 	if err != nil {
 		message = err.Error()
 	}
-	if e := w.DB.RefundNeedsAttention(finishCtx, j, message); e != nil {
+	var finishErr error
+	if j.Settings.Recovery != nil && j.Settings.Recovery.Enabled {
+		diagnostic := store.RefundDiagnostic{Code: "protocol_failed"}
+		var pe *ProtocolError
+		if errors.As(err, &pe) {
+			diagnostic = pe.Diagnostic
+		}
+		finishErr = w.DB.FinishRefundAttempt(finishCtx, j, diagnostic)
+	} else {
+		finishErr = w.DB.RefundNeedsAttention(finishCtx, j, message)
+	}
+	if finishErr != nil {
 		slog.Error("refund progress persistence failed", "refund_id", j.ID)
 	}
 }

@@ -103,7 +103,7 @@ func TestWorkerFullFlowThenAcceptedFailureResumesWithoutResubmit(t *testing.T) {
 	}
 	worker.Execute(ctx, job)
 	r, _ := s.Refund(ctx, u.ID, ids[0])
-	if r.Status != "attention" || r.FeeStatus != "frozen" {
+	if r.Status != "processing" || r.FeeStatus != "frozen" {
 		t.Fatalf("failure prematurely settled %+v", r)
 	}
 	if err = s.ResumeRefund(ctx, a.ID, ids[0], "resume", "checked mother connection"); err != nil {

@@ -10,16 +10,18 @@ import (
 )
 
 type RefundJob struct {
-	ID          string                 `json:"id"`
-	UserID      string                 `json:"-"`
-	LeaseToken  string                 `json:"-"`
-	Step        string                 `json:"step"`
-	ChildUserID string                 `json:"child_user_id"`
-	Account     refundprovider.Account `json:"account"`
-	Mother      RefundMother           `json:"mother"`
-	ChildProxy  string                 `json:"child_proxy"`
-	MotherProxy string                 `json:"mother_proxy"`
-	Settings    RefundSettings         `json:"settings"`
+	RecoveryMode     string                 `json:"recovery_mode"`
+	PersonalBaseline *PersonalSnapshot      `json:"personal_baseline"`
+	ID               string                 `json:"id"`
+	UserID           string                 `json:"-"`
+	LeaseToken       string                 `json:"-"`
+	Step             string                 `json:"step"`
+	ChildUserID      string                 `json:"child_user_id"`
+	Account          refundprovider.Account `json:"account"`
+	Mother           RefundMother           `json:"mother"`
+	ChildProxy       string                 `json:"child_proxy"`
+	MotherProxy      string                 `json:"mother_proxy"`
+	Settings         RefundSettings         `json:"settings"`
 }
 
 // ClaimRefund serializes allocation in the database, not in process memory.
@@ -34,12 +36,10 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		return nil, err
 	}
 	var cfg RefundSettings
-	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID, &cfg.MotherIntervalSeconds); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID, &cfg.MotherIntervalSeconds, &cfg.Recovery); err != nil {
 		return nil, err
 	}
-	if !cfg.Enabled {
-		return nil, nil
-	}
+	recoveryEnabled := cfg.Recovery != nil && cfg.Recovery.Enabled
 	var count int
 	if err = tx.QueryRow(ctx, "SELECT count(*) FROM refund_execution WHERE lease_until>now() AND NOT released").Scan(&count); err != nil {
 		return nil, err
@@ -49,11 +49,40 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 	}
 	job := &RefundJob{Settings: cfg}
 	// Recover an interrupted reservation first. Unknown submissions are never replayed.
-	var oldToken, childProxyID string
-	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,'') FROM refund_execution e JOIN refunds r ON r.id=e.refund_id JOIN refund_mothers m ON m.id=e.mother_id JOIN refund_proxies p ON p.id=m.proxy_id WHERE NOT e.released AND r.status IN ('processing','verifying') AND (e.lease_until IS NULL OR e.lease_until<now()) AND m.enabled AND p.enabled AND (e.step IN ('accepted','removing') OR EXISTS(SELECT 1 FROM refund_proxies cp WHERE cp.id=COALESCE(e.child_proxy_id,NULLIF($1,'')) AND cp.enabled)) ORDER BY e.updated_at LIMIT 1`, cfg.ChildProxyID).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID)
+	var oldToken, childProxyID, previousStatus string
+	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,''),e.recovery_mode,e.personal_baseline,r.status
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id JOIN refund_mothers m ON m.id=e.mother_id JOIN refund_proxies p ON p.id=m.proxy_id
+ WHERE NOT e.released AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
+ AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2)
+ AND (e.lease_until IS NULL OR e.lease_until<now()) AND m.enabled AND p.enabled
+ AND (e.step IN ('accepted','removing') OR e.recovery_mode='cleanup' OR EXISTS(SELECT 1 FROM refund_proxies cp WHERE cp.id=COALESCE(e.child_proxy_id,NULLIF($1,'')) AND cp.enabled))
+ ORDER BY COALESCE(e.next_attempt_at,e.updated_at),e.refund_id LIMIT 1`, cfg.ChildProxyID, recoveryEnabled).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID, &job.RecoveryMode, &job.PersonalBaseline, &previousStatus)
 	existing := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
+	}
+	if existing {
+		if _, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", job.UserID); err != nil {
+			return nil, err
+		}
+		var live, released, eligible bool
+		if err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,e.recovery_mode,e.personal_baseline,COALESCE(e.lease_until>now(),false),e.released,r.status,
+ (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2)
+ AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id WHERE e.refund_id=$1 FOR UPDATE OF r,e`, job.ID, recoveryEnabled).Scan(&job.Step, &oldToken, &job.RecoveryMode, &job.PersonalBaseline, &live, &released, &previousStatus, &eligible); err != nil {
+			return nil, err
+		}
+		// A finishing worker may have scheduled a later attempt while this claim
+		// waited for the user's lock. Never bypass that newly persisted interval.
+		if live || released || !eligible {
+			return nil, nil
+		}
+	}
+	if existing && recoveryEnabled && (previousStatus == "attention" || oldToken != "") {
+		if err = scheduleRefundRecovery(ctx, tx, job, job.Step, RefundDiagnostic{Code: "worker_interrupted", Retryable: true}); err != nil {
+			return nil, err
+		}
+		return nil, tx.Commit(ctx)
 	}
 	if existing && oldToken != "" && job.Step != "accepted" && job.Step != "removing" {
 		message := "任务中断，执行进度已保留，请管理员核实后续跑。"
@@ -77,7 +106,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		childProxyID = cfg.ChildProxyID
 	}
 	var childProxySecret []byte
-	if job.Step != "accepted" && job.Step != "removing" {
+	if job.Step != "accepted" && job.Step != "removing" && job.RecoveryMode != "cleanup" {
 		err = tx.QueryRow(ctx, "SELECT secret FROM refund_proxies WHERE id=$1 AND enabled", childProxyID).Scan(&childProxySecret)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -90,6 +119,9 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 	}
 	if !existing {
+		if !cfg.Enabled {
+			return nil, nil
+		}
 		// Only new reservations wait. Persisted completion times survive restarts;
 		// the latest setting also applies to mothers already between requests.
 		err = tx.QueryRow(ctx, `SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
@@ -122,7 +154,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 	}
 	job.LeaseToken = Token()
-	if _, err = tx.Exec(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),updated_at=now() WHERE refund_id=$1", job.ID, job.LeaseToken, childProxyID); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1", job.ID, job.LeaseToken, childProxyID); err != nil {
 		return nil, err
 	}
 	var motherSecret, proxySecret, accountSecret []byte
@@ -153,9 +185,11 @@ func (s *Store) RenewRefundLease(ctx context.Context, j *RefundJob) error {
 }
 
 type Checkpoint struct {
-	Method string `json:"method"`
-	TeamID string `json:"team_id"`
-	UserID string `json:"user_id"`
+	Diagnostic *RefundDiagnostic `json:"diagnostic,omitempty"`
+	Baseline   *PersonalSnapshot `json:"baseline,omitempty"`
+	Method     string            `json:"method"`
+	TeamID     string            `json:"team_id"`
+	UserID     string            `json:"user_id"`
 }
 
 // Every upstream mutation is preceded by a committed checkpoint. Accepted facts
@@ -178,8 +212,62 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 	if released || token != j.LeaseToken || (!live && c.Method != "merge_v2_accepted") || status == "succeeded" || status == "failed" {
 		return ErrState
 	}
+	if c.Diagnostic != nil {
+		if err = recordDiagnostic(ctx, tx, j.ID, *c.Diagnostic); err != nil {
+			return err
+		}
+	}
 	next, message := "", ""
 	switch c.Method {
+	case "personal_baseline":
+		if step != "login" || c.Baseline == nil || !c.Baseline.Valid() {
+			return ErrState
+		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET personal_baseline=COALESCE(personal_baseline,$2::jsonb) WHERE refund_id=$1", j.ID, c.Baseline); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	case "verification_started":
+		if step != "submitting" || j.RecoveryMode != "verify" {
+			return ErrState
+		}
+		next = step
+		message = "正在只读核实本次处理结果。"
+	case "verification_result":
+		if step != "submitting" || j.RecoveryMode != "verify" || c.Diagnostic == nil {
+			return ErrState
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'本轮只读核实结束，处理结果仍待确认。',true)", j.ID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	case "cleanup_started":
+		if j.RecoveryMode != "cleanup" || oneOf(step, "submitting", "accepted", "removing", "completed", "failed") {
+			return ErrState
+		}
+		next = step
+		message = "正在清理未完成申请的本次资源。"
+	case "cleanup_completed":
+		if j.RecoveryMode != "cleanup" || oneOf(step, "submitting", "accepted", "removing", "completed", "failed") {
+			return ErrState
+		}
+		var accepted bool
+		if err = tx.QueryRow(ctx, "SELECT accepted_at IS NOT NULL FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&accepted); err != nil {
+			return err
+		}
+		if accepted {
+			return ErrState
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'本次资源已确认清理。',true)", j.ID); err != nil {
+			return err
+		}
+		if err = transitionTx(ctx, tx, j.UserID, j.ID, "failed", "本次服务未完成，冻结服务费已释放。"); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET step='failed',released=true,lease_token='',lease_until=NULL,next_attempt_at=NULL,recovery_mode='',updated_at=now() WHERE refund_id=$1", j.ID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	case "inviting":
 		if step != "assigned" && step != "inviting" {
 			return ErrState
@@ -243,7 +331,7 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		if err = transitionTx(ctx, tx, j.UserID, j.ID, "succeeded", message); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET completed_at=now(),released=true,lease_until=NULL,lease_token='' WHERE refund_id=$1", j.ID); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET completed_at=now(),released=true,lease_until=NULL,lease_token='',next_attempt_at=NULL,recovery_mode='' WHERE refund_id=$1", j.ID); err != nil {
 			return err
 		}
 	default:
@@ -254,7 +342,7 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 	}
 	// A repeated start is a distinct attempt, even when the checkpoint does not
 	// change. Retain its timestamp without changing recovery or upstream logic.
-	if c.Method != "completed" && (next != step || c.Method == "login" || c.Method == "inviting" || c.Method == "removing") {
+	if c.Method != "completed" && (next != step || c.Method == "login" || c.Method == "inviting" || c.Method == "removing" || c.Method == "verification_started" || c.Method == "cleanup_started") {
 		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,$2,true)", j.ID, message); err != nil {
 			return err
 		}
@@ -316,13 +404,13 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 	if _, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", uid); err != nil {
 		return err
 	}
-	var step, status, child string
+	var step, status, child, recoveryMode string
 	var live, accepted bool
-	err = tx.QueryRow(ctx, `SELECT e.step,r.status,COALESCE(e.lease_until>now(),false),e.accepted_at IS NOT NULL,e.child_user_id FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, id).Scan(&step, &status, &live, &accepted, &child)
+	err = tx.QueryRow(ctx, `SELECT e.step,r.status,COALESCE(e.lease_until>now(),false),e.accepted_at IS NOT NULL,e.child_user_id,e.recovery_mode FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, id).Scan(&step, &status, &live, &accepted, &child, &recoveryMode)
 	if err != nil {
 		return ErrNotFound
 	}
-	if live || status != "attention" {
+	if live || (status != "attention" && !(oneOf(status, "processing", "verifying") && recoveryMode != "")) {
 		return invalid("只能处理已停止的待跟进申请")
 	}
 	message := "管理员已安排续跑，将从保留的进度继续。"
@@ -331,6 +419,21 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 		if step == "submitting" {
 			return invalid("处理结果未知，请先核实本次结果")
 		}
+	case "verify_only":
+		var enabled bool
+		if err = tx.QueryRow(ctx, "SELECT (recovery->>'enabled')::boolean FROM refund_settings WHERE id").Scan(&enabled); err != nil {
+			return err
+		}
+		if !enabled {
+			return invalid("请先开启自动恢复与核实")
+		}
+		if step != "submitting" {
+			return ErrState
+		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode='verify',verify_count=0,next_attempt_at=now() WHERE refund_id=$1", id); err != nil {
+			return err
+		}
+		message = "管理员已安排只读核实，不重复提交。"
 	case "confirm_accepted":
 		if step != "submitting" || child == "" {
 			return ErrState
@@ -353,13 +456,18 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 		if err = transitionTx(ctx, tx, uid, id, "failed", "本次服务未完成，冻结服务费已释放。"); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET step='failed',released=true,lease_token='',lease_until=NULL,updated_at=now() WHERE refund_id=$1", id); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET step='failed',released=true,lease_token='',lease_until=NULL,next_attempt_at=NULL,recovery_mode='',updated_at=now() WHERE refund_id=$1", id); err != nil {
 			return err
 		}
 	default:
 		return ErrInvalid
 	}
 	if action != "fail_cleaned" {
+		if action != "verify_only" {
+			if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode='',next_attempt_at=NULL,retry_count=0,cleanup_count=0,verify_count=0,recovery_started_at=NULL WHERE refund_id=$1", id); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,$2,true)", id, message); err != nil {
 			return err
 		}

@@ -20,6 +20,7 @@ type RefundTimelineItem struct {
 	Reason          string     `json:"reason"`
 }
 type RefundTimeline struct {
+	Recovery    *RefundRecoveryView  `json:"recovery,omitempty"`
 	Items       []RefundTimelineItem `json:"items"`
 	Active      bool                 `json:"active"`
 	GeneratedAt time.Time            `json:"generated_at"`
@@ -65,7 +66,12 @@ func (s *Store) AdminRefundTimeline(ctx context.Context, id string) (*RefundTime
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	return projectRefundTimeline(status, created, now, accepted, completed, events), tx.Commit(ctx)
+	out := projectRefundTimeline(status, created, now, accepted, completed, events)
+	out.Recovery, err = readRefundRecovery(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	return out, tx.Commit(ctx)
 }
 
 func projectRefundTimeline(status string, created, now time.Time, accepted, completed *time.Time, events []timelineEvent) *RefundTimeline {
@@ -161,6 +167,16 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 			continue
 		}
 		switch e.message {
+		case "已安排自动核实，不重复提交。", "已安排按间隔从原阶段续办。", "已安排资源清理及结果核对。", "自动恢复已暂停，需人工核实。":
+			interrupt(e.at)
+		case "正在只读核实本次处理结果。":
+			start("核", e.at)
+		case "本轮只读核实结束，处理结果仍待确认。":
+			finishStage("核", e.at, "待核实", "本轮核对结束，尚无明确完成依据")
+		case "正在清理未完成申请的本次资源。":
+			start("移", e.at)
+		case "本次资源已确认清理。":
+			finishStage("移", e.at, "已完成", "")
 		case "正在发送团队邀请。":
 			start("邀", e.at)
 		case "团队邀请已确认，准备登录账号。":

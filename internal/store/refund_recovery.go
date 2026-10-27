@@ -1,0 +1,258 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type RefundRecoverySettings struct {
+	Enabled          bool  `json:"enabled"`
+	MaxRetries       int   `json:"max_retries"`
+	VerifyIntervals  []int `json:"verify_intervals"`
+	CleanupIntervals []int `json:"cleanup_intervals"`
+	AlertSeconds     int   `json:"alert_seconds"`
+	CleanupFailed    bool  `json:"cleanup_failed"`
+}
+
+func (v RefundRecoverySettings) Validate() error {
+	if v.MaxRetries < 0 || v.MaxRetries > 10 || v.AlertSeconds < 60 || v.AlertSeconds > 86400 {
+		return invalid("自动重试须为 0～10 次，告警阈值须为 60～86400 秒")
+	}
+	for _, values := range [][]int{v.VerifyIntervals, v.CleanupIntervals} {
+		if len(values) < 1 || len(values) > 10 {
+			return invalid("核实和清理须各设置 1～10 轮间隔")
+		}
+		for _, n := range values {
+			if n < 5 || n > 86400 {
+				return invalid("每轮间隔须为 5～86400 秒")
+			}
+		}
+	}
+	return nil
+}
+
+// Internal, typed evidence only. Never persist response bodies, tokens, URLs,
+// headers, exception strings or arbitrary upstream error codes.
+type RefundDiagnostic struct {
+	Code        string `json:"code"`
+	HTTPStatus  int    `json:"http_status,omitempty"`
+	NetworkCode int    `json:"network_code,omitempty"`
+	DurationMS  int    `json:"duration_ms,omitempty"`
+	Retryable   bool   `json:"retryable,omitempty"`
+}
+
+var recoveryReasons = map[string]string{
+	"export_uncertain":         "处理结果未明确，正在核实",
+	"export_rejected":          "本次请求未受理",
+	"export_not_sent":          "连接未建立，请求尚未发送",
+	"export_accepted":          "已收到明确受理确认",
+	"login_failed":             "账号登录未完成",
+	"team_session_expired":     "会话需要更新",
+	"extra_verification":       "账号需要补充验证",
+	"account_unavailable":      "账号当前不可用",
+	"mother_network":           "服务连接未完成",
+	"mother_http":              "服务请求未完成",
+	"mother_shape":             "服务查询结果无法确认",
+	"mother_pagination":        "服务查询结果不完整",
+	"mother_identity":          "服务身份校验未通过",
+	"member_identity":          "账号身份校验未通过",
+	"proxy_missing":            "网络配置不可用",
+	"protocol_failed":          "办理中断，已保留进度",
+	"worker_interrupted":       "办理中断，已安排恢复检查",
+	"verification_active":      "原个人空间仍可见，受理结果仍待核实",
+	"verification_missing":     "个人空间已不可见，仍需确认处理结果",
+	"verification_deactivated": "原个人空间显示已停用，仍需确认受理依据",
+	"verification_changed":     "账户空间信息发生变化，需要人工核实",
+	"verification_unavailable": "本轮未取得完整核实结果",
+	"verification_no_baseline": "缺少提交前记录，需要人工核实",
+	"cleanup_pending":          "正在核对资源清理结果",
+	"cleanup_invite_pending":   "待加入记录尚未清理，需要人工跟进",
+	"cleanup_failed":           "资源清理未完成",
+	"cleanup_completed":        "本次资源已确认清理",
+}
+
+func (d RefundDiagnostic) Sanitized() RefundDiagnostic {
+	if _, ok := recoveryReasons[d.Code]; !ok {
+		d.Code = "protocol_failed"
+		d.Retryable = false
+	}
+	if d.HTTPStatus < 100 || d.HTTPStatus > 599 {
+		d.HTTPStatus = 0
+	}
+	if d.NetworkCode < 0 || d.NetworkCode > 999 {
+		d.NetworkCode = 0
+	}
+	if d.DurationMS < 0 || d.DurationMS > 900000 {
+		d.DurationMS = 0
+	}
+	return d
+}
+
+type PersonalSnapshot struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+func (v PersonalSnapshot) Valid() bool {
+	return len(v.ID) <= 150 && oneOf(v.State, "active", "deactivated", "missing", "unknown") && (v.State == "missing" || v.State == "unknown" || v.ID != "")
+}
+
+func recordDiagnostic(ctx context.Context, tx pgx.Tx, id string, d RefundDiagnostic) error {
+	d = d.Sanitized()
+	if _, err := tx.Exec(ctx, "INSERT INTO refund_execution_diagnostics(refund_id,diagnostic) VALUES($1,$2)", id, d); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, "UPDATE refund_execution SET last_diagnostic=$2 WHERE refund_id=$1", id, d)
+	return err
+}
+
+// A delayed attempt does not hold a worker lease. Its mother reservation stays
+// exclusive until verified cleanup; neither elapsed time nor a 404 releases it.
+func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step string, d RefundDiagnostic) error {
+	d = d.Sanitized()
+	if err := recordDiagnostic(ctx, tx, j.ID, d); err != nil {
+		return err
+	}
+	var retries, checks, cleanups int
+	var mode string
+	if err := tx.QueryRow(ctx, "SELECT retry_count,verify_count,cleanup_count,recovery_mode FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&retries, &checks, &cleanups, &mode); err != nil {
+		return err
+	}
+	cfg := j.Settings.Recovery
+	nextMode, status, message, delay := "", "attention", "申请需要跟进，请联系服务专员。", 0
+	if cfg != nil && cfg.Enabled {
+		switch {
+		case step == "submitting":
+			if checks < len(cfg.VerifyIntervals) {
+				nextMode = "verify"
+				delay = cfg.VerifyIntervals[checks]
+			}
+		case step == "accepted" || step == "removing" || mode == "cleanup":
+			if cleanups < len(cfg.CleanupIntervals) {
+				nextMode = "cleanup"
+				delay = cfg.CleanupIntervals[cleanups]
+			}
+		case d.Retryable && retries < cfg.MaxRetries:
+			nextMode = "retry"
+			delay = j.Settings.RetrySeconds
+		case cfg.CleanupFailed && oneOf(step, "assigned", "inviting", "invited", "login", "ready") && !oneOf(d.Code, "mother_identity", "member_identity", "extra_verification", "proxy_missing", "protocol_failed"):
+			nextMode = "cleanup"
+			delay = cfg.CleanupIntervals[0]
+		}
+	}
+	if nextMode != "" {
+		status = "processing"
+		message = "处理时间延长，正在继续"
+		if nextMode == "verify" {
+			status = "verifying"
+		}
+	}
+	if err := transitionTx(ctx, tx, j.UserID, j.ID, status, message); err != nil {
+		return err
+	}
+	// A same-status retry still needs a current customer-facing progress message.
+	if _, err := tx.Exec(ctx, "UPDATE refunds SET message=$2,updated_at=now() WHERE id=$1", j.ID, message); err != nil {
+		return err
+	}
+	internal := "自动恢复已暂停，需人工核实。"
+	if nextMode == "verify" {
+		internal = "已安排自动核实，不重复提交。"
+	}
+	if nextMode == "retry" {
+		internal = "已安排按间隔从原阶段续办。"
+	}
+	if nextMode == "cleanup" {
+		internal = "已安排资源清理及结果核对。"
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,$2,true)", j.ID, internal); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE refund_execution SET recovery_mode=$2,recovery_started_at=COALESCE(recovery_started_at,now()),
+ next_attempt_at=CASE WHEN $2='' THEN NULL ELSE now()+($3 * interval '1 second') END,
+ lease_until=NULL,lease_token='',updated_at=now() WHERE refund_id=$1`, j.ID, nextMode, delay)
+	return err
+}
+
+func (s *Store) FinishRefundAttempt(ctx context.Context, j *RefundJob, d RefundDiagnostic) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", j.UserID); err != nil {
+		return err
+	}
+	var token, step string
+	var released bool
+	if err = tx.QueryRow(ctx, "SELECT lease_token,step,released FROM refund_execution WHERE refund_id=$1 FOR UPDATE", j.ID).Scan(&token, &step, &released); err != nil {
+		return err
+	}
+	if released || token != j.LeaseToken {
+		return nil
+	}
+	// Read current settings, including changes made while an attempt was running.
+	if err = tx.QueryRow(ctx, "SELECT recovery,retry_seconds FROM refund_settings WHERE id").Scan(&j.Settings.Recovery, &j.Settings.RetrySeconds); err != nil {
+		return err
+	}
+	if err = scheduleRefundRecovery(ctx, tx, j, step, d); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+type RefundRecoveryView struct {
+	Pending   bool       `json:"pending"`
+	Running   bool       `json:"running"`
+	Alert     bool       `json:"alert"`
+	Label     string     `json:"label"`
+	Reason    string     `json:"reason"`
+	StartedAt *time.Time `json:"started_at"`
+	NextAt    *time.Time `json:"next_at"`
+	Retries   int        `json:"retries"`
+	Checks    int        `json:"checks"`
+	Cleanups  int        `json:"cleanups"`
+}
+
+type recoveryQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (s *Store) AdminRefundRecovery(ctx context.Context, id string) (*RefundRecoveryView, error) {
+	return readRefundRecovery(ctx, s.Pool, id)
+}
+func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*RefundRecoveryView, error) {
+	var v RefundRecoveryView
+	var mode string
+	var raw []byte
+	var released, enabled bool
+	err := q.QueryRow(ctx, `SELECT e.recovery_mode,e.recovery_started_at,e.next_attempt_at,e.retry_count,e.verify_count,e.cleanup_count,e.last_diagnostic,e.released,
+ COALESCE(e.lease_until>now(),false),NOT e.released AND COALESCE(e.recovery_started_at<=now()-((s.recovery->>'alert_seconds')::int * interval '1 second'),false),(s.recovery->>'enabled')::boolean
+ FROM refund_execution e CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	v.Pending = !released && (v.NextAt != nil || v.Running)
+	v.Label = map[string]string{"retry": "等待续办", "verify": "自动核实", "cleanup": "清理核对", "": "等待人工核实"}[mode]
+	if !released && !enabled && mode != "" && !v.Running {
+		v.Pending = false
+		v.NextAt = nil
+		v.Label = "自动恢复已暂停"
+	}
+	if released {
+		v.Label = "处理已结束"
+		v.NextAt = nil
+		v.Alert = false
+	}
+	var d RefundDiagnostic
+	_ = json.Unmarshal(raw, &d)
+	if d.Code != "" {
+		v.Reason = recoveryReasons[d.Sanitized().Code]
+	}
+	return &v, nil
+}

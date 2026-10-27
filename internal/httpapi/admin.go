@@ -149,7 +149,7 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 				s.result(w, nil, err)
 				return
 			}
-			if e != nil && refund.Status == "attention" {
+			if e != nil && !e.Released && (refund.Status == "attention" || e.RecoveryMode != "") {
 				result["recovery"] = map[string]bool{"running": e.Running, "needs_review": e.Step == "submitting", "can_release": e.AcceptedAt == nil && e.Step != "submitting"}
 			}
 		}

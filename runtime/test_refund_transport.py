@@ -108,6 +108,10 @@ class ProxyFlow:
         data = json.loads(raw) if raw and headers.get("Content-Type", "").startswith("application/json") else {}
         team = self.job["mother"]["team_id"]
         email = self.job["account"]["email"]
+        if path == "/backend-api/accounts/check/v4-2023-04-27":
+            assert role == "child" and method == "GET"
+            assert headers["Authorization"] == "Bearer " + self.token
+            return 200, {"accounts":{"personal":{"account":{"account_id":"fixture-personal","structure":"personal","is_deactivated":False}}}}, {}
         if path.startswith("/backend-api/accounts/") and path != "/backend-api/accounts/export_and_deactivate":
             assert role == "mother"
             assert headers["Authorization"] == "Bearer " + self.job["mother"]["access_token"]

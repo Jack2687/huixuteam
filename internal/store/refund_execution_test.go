@@ -36,6 +36,10 @@ func executionFixture(t *testing.T, n int) (*store.Store, store.User, store.User
 	if err = s.SaveRefundSettings(ctx, a.ID, store.RefundSettings{ChildProxyID: p, Enabled: true, MaxParallel: 2, LoginAttempts: 2, RetrySeconds: 5}); err != nil {
 		t.Fatal(err)
 	}
+	// These pre-existing tests exercise the explicit manual-recovery mode.
+	if _, err = s.Pool.Exec(ctx, `UPDATE refund_settings SET recovery=jsonb_set(recovery,'{enabled}','false')`); err != nil {
+		t.Fatal(err)
+	}
 	return s, a, u
 }
 func submitRequests(t *testing.T, s *store.Store, u store.User, n int) []string {

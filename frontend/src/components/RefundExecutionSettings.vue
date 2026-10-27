@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { api, statuses } from "../lib/api";
 import ResourceCheckSummary from "./ResourceCheckSummary.vue";
 import type { ResourceCheck } from "../lib/resource-check";
@@ -8,9 +8,12 @@ import RefundDetail from "./RefundDetail.vue";
 type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
 type Mother = { check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
 type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
-type Settings = { enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
+type Recovery={enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
+type Settings = { recovery:Recovery; enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
 const emit=defineEmits<{toast:[message:string]}>();
-const settings=ref<Settings>({enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
+const settings=ref<Settings>({recovery:{enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
+const intervalText=(key:'verify_intervals'|'cleanup_intervals')=>computed({get:()=>settings.value.recovery[key].join(', '),set:(value:string)=>{settings.value.recovery[key]=value.split(/[,，\s]+/).filter(Boolean).map(Number)}});
+const verifyIntervals=intervalText('verify_intervals'),cleanupIntervals=intervalText('cleanup_intervals');
 const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
 const mother=ref<Mother>({id:"",name:"",email:"",team_id:"",proxy_id:"",seat_type:"default",enabled:true,has_secret:false,access_token:""});
 const proxy=ref<ProxyRow>({id:"",name:"",url:"",enabled:true,has_secret:false});
@@ -98,7 +101,7 @@ onMounted(load);
     <label class="checkbox-label"><input v-model="settings.enabled" type="checkbox"/>允许队列自动办理申请</label>
     <div class="form-row">
      <label>并行母号上限<input v-model.number="settings.max_parallel" type="number" min="1" max="8" required/></label>
-     <label>尝试次数上限<input v-model.number="settings.max_attempts" type="number" min="1" max="3" required/></label>
+     <label v-if="!settings.recovery.enabled">单次登录尝试次数上限<input v-model.number="settings.max_attempts" type="number" min="1" max="3" required/></label>
      <label>重试间隔（秒）<input v-model.number="settings.retry_seconds" type="number" min="5" max="300" required/></label>
      <label>同母号接单间隔（秒）<input v-model.number="settings.mother_interval_seconds" type="number" min="0" max="86400" step="1" required/></label>
     </div>
@@ -106,6 +109,19 @@ onMounted(load);
     <p class="muted">子号的全部请求固定使用全局代理，母号请求使用各自绑定的专属代理。修改全局选择只影响新申请，已领取的申请保留原出口；缺少可用代理时保留排队，不直连。</p>
     <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；结果待核实的请求不会自动重复发送。</p>
     <p class="muted">接单间隔从同母号上一单成功完成后开始计算，默认 0 秒，不额外等待。保存后对正在等待的母号立即生效；到期后在下一轮调度（约 2 秒内）接单，其他空闲母号照常办理，已开始的任务及续跑不受影响。</p>
+    <fieldset class="recovery-settings">
+     <legend>异常恢复与占用告警</legend>
+     <label class="checkbox-label"><input v-model="settings.recovery.enabled" type="checkbox"/>启用自动恢复与只读核实</label>
+     <div class="form-row">
+      <label>自动重试次数（首次失败之后）<input v-model.number="settings.recovery.max_retries" type="number" min="0" max="10" required/></label>
+      <label>核实各轮间隔（秒，逗号分隔）<input v-model="verifyIntervals" required placeholder="30, 60, 120, 300"/></label>
+      <label>清理各轮间隔（秒，逗号分隔）<input v-model="cleanupIntervals" required placeholder="15, 30, 60"/></label>
+      <label>异常占用告警阈值（秒）<input v-model.number="settings.recovery.alert_seconds" type="number" min="60" max="86400" required/></label>
+     </div>
+     <label class="checkbox-label"><input v-model="settings.recovery.cleanup_failed" type="checkbox"/>明确未受理且重试结束后，自动清理本次资源并释放费用</label>
+     <p class="muted">普通重试使用上方重试间隔；每轮核实与清理都从上一轮结束后计时。等待期间不占执行并发，同母号仍保持串行。关闭自动恢复不强行中断在途操作。</p>
+     <p class="muted">结果未知时只核实，不重复提交、不提前移出或扣费。超过轮次或告警阈值后，请到申请全监控跟进；缺少明确完成依据或资源无法安全清理时保留占用。</p>
+    </fieldset>
     <button class="button primary" :disabled="busy">应用调度配置</button>
    </form>
   </section>

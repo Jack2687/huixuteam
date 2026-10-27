@@ -483,7 +483,7 @@ func transitionTx(ctx context.Context, tx pgx.Tx, uid, id, to, message string) e
 	}
 	allowed := map[string]map[string]bool{
 		"queued": {"cancelled": true, "processing": true}, "processing": {"verifying": true, "succeeded": true, "failed": true, "banned": true, "attention": true},
-		"verifying": {"succeeded": true, "failed": true, "attention": true, "banned": true}, "attention": {"processing": true, "succeeded": true, "failed": true, "banned": true},
+		"verifying": {"processing": true, "succeeded": true, "failed": true, "attention": true, "banned": true}, "attention": {"verifying": true, "processing": true, "succeeded": true, "failed": true, "banned": true},
 	}
 	if !allowed[r.Status][to] {
 		return ErrState

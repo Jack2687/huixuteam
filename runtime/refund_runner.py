@@ -136,18 +136,40 @@ class MotherClient:
             raise UpstreamFailure("member_identity")
         self.call("DELETE", "/users/" + quote(child_id, safe=""))
 
+    def confirm_removed(self):
+        if self.find("users") is not None or self.find("invites") is not None:
+            raise UpstreamFailure("cleanup_pending")
+
+    def cleanup_unaccepted(self, child_id):
+        row = self.find("users")
+        if row is not None:
+            identity = child_id or str(row.get("user_id") or row.get("id") or "")
+            self.remove(identity)
+        # No verified cancellation contract is available for pending invites.
+        # Preserve the reservation instead of guessing an endpoint or hiding it.
+        if self.find("invites") is not None:
+            raise UpstreamFailure("cleanup_invite_pending")
+        self.confirm_removed()
+
 
 def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=CustomerLogin, sleep=time.sleep):
+    recovery = (job.get("settings", {}).get("recovery") or {}).get("enabled", False)
+    mode = job.get("recovery_mode", "")
     step = job["step"]
     child_id = job.get("child_user_id") or ""
     accepted = step in {"accepted", "removing"}
-    if step == "submitting":
+    if step == "submitting" and mode != "verify":
         return {"ok": False, "code": "export_uncertain"}
-    if not job.get("mother_proxy") or (not accepted and not job.get("child_proxy")):
+    if not job.get("mother_proxy") or (not accepted and mode != "cleanup" and not job.get("child_proxy")):
         return {"ok": False, "code": "proxy_missing"}
     mother = None
     try:
         mother = mother_factory(job)
+        if mode == "cleanup" and not accepted:
+            checkpoint("cleanup_started")
+            mother.cleanup_unaccepted(child_id)
+            checkpoint("cleanup_completed")
+            return {"ok": True}
         if step in {"assigned", "inviting"}:
             checkpoint("inviting")
             mother.invite()
@@ -161,6 +183,10 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                 "selected_login_mode": "password_totp", "allow_sms": False,
                 "skip_phone_verification": True, "merge_v2": {"team_id": job["mother"]["team_id"]},
             }
+            if mode == "verify":
+                from refund_recovery import verify
+                bridge.configure(payload, lambda *_: (_ for _ in ()).throw(StopProtocol()))
+                return verify(job, checkpoint, login_factory, payload)
 
             def flow_rpc(method, params):
                 nonlocal child_id, accepted
@@ -171,7 +197,7 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                     accepted = True
                 return {}
 
-            attempts = job["settings"]["max_attempts"]
+            attempts = 1 if recovery else job["settings"]["max_attempts"]
             for attempt in range(attempts):
                 checkpoint("login")
                 bridge.configure(payload, flow_rpc)
@@ -179,6 +205,13 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                 try:
                     flow = login_factory(job["id"], payload)
                     session = flow.login()
+                    if recovery and not job.get("personal_baseline"):
+                        from refund_recovery import personal_snapshot, VerificationUnavailable
+                        try:
+                            baseline = personal_snapshot(flow, session)
+                        except VerificationUnavailable:
+                            baseline = {"id": "", "state": "unknown"}
+                        checkpoint("personal_baseline", {"baseline": baseline})
                     result = flow.submit_export(session)
                 except NeedsVerification:
                     return {"ok": False, "code": "extra_verification"}
@@ -193,18 +226,22 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
                 if result.get("success") and accepted:
                     break
                 if accepted or not result.get("retryable") or attempt + 1 == attempts:
-                    return {"ok": False, "code": result.get("error_code") or "login_failed", "http_status": result.get("http_status", 0)}
+                    return {"ok": False, "code": result.get("error_code") or "login_failed", "http_status": result.get("http_status", 0),
+                            **({"retryable": bool(result.get("retryable")), "network_code": result.get("network_code", 0), "duration_ms": result.get("duration_ms", 0)} if recovery else {})}
                 sleep(job["settings"]["retry_seconds"])
         if not accepted:
             return {"ok": False, "code": "export_uncertain"}
         checkpoint("removing")
         mother.remove(child_id)
+        if recovery:
+            mother.confirm_removed()
         checkpoint("completed")
         return {"ok": True}
     except StopProtocol:
         return {"ok": False, "code": "checkpoint_declined"}
     except UpstreamFailure as exc:
-        return {"ok": False, "code": exc.code, "http_status": exc.status}
+        return {"ok": False, "code": exc.code, "http_status": exc.status,
+                **({"network_code": exc.network_code, "retryable": exc.code in {"mother_network", "cleanup_pending"} or exc.status in {408, 429, 500, 502, 503, 504}} if recovery else {})}
     except Exception:
         return {"ok": False, "code": "protocol_failed"}
     finally:

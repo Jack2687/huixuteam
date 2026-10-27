@@ -79,7 +79,7 @@ func TestRefundMonitorPermissionsAndPublicSchema(t *testing.T) {
 		if data.Total != 1 || data.Size != 100 || len(data.Items) != 1 {
 			t.Fatal("bad pagination", data)
 		}
-		allowed := strings.Fields("id email status fee fee_status message created_at updated_at user_id user_name user_email started_at finished_at wait_seconds handle_seconds long_wait long_running")
+		allowed := strings.Fields("id email status fee fee_status message created_at updated_at user_id user_name user_email started_at finished_at wait_seconds handle_seconds long_wait long_running recovery_alert recovery_pending next_check_at")
 		if len(data.Items[0]) != len(allowed) {
 			t.Fatal("unexpected response schema", data.Items[0])
 		}
