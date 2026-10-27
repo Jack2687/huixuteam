@@ -23,10 +23,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY runtime/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY runtime /app/runtime
-RUN cd /app/runtime/manager_oauth && npm ci --omit=dev --no-audit --no-fund && python /app/runtime/refund_runner.py --check
-RUN python -m unittest discover -s /app/runtime -p 'test_*.py'
+# Git checkout may run with umask 077. Source must remain readable by the
+# unprivileged runtime user, independently of build-context file permissions.
+RUN chmod -R a+rX /app/runtime && cd /app/runtime/manager_oauth && npm ci --omit=dev --no-audit --no-fund
 USER app
 WORKDIR /app
+RUN python /app/runtime/refund_runner.py --check && python -m unittest discover -s /app/runtime -p 'test_*.py'
 COPY --from=backend /server /app/server
 ENV LISTEN_HOST=0.0.0.0 PORT=18740
 EXPOSE 18740
