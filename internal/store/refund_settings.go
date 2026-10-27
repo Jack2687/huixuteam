@@ -15,6 +15,7 @@ import (
 )
 
 type RefundSettings struct {
+	MotherFailover        *MotherFailoverSettings `json:"mother_failover"`
 	Recovery              *RefundRecoverySettings `json:"recovery"`
 	ChildProxyID          string                  `json:"child_proxy_id"`
 	Enabled               bool                    `json:"enabled"`
@@ -32,6 +33,7 @@ type RefundProxy struct {
 	URL       string         `json:"url,omitempty"`
 }
 type RefundMother struct {
+	AuthBlocked    bool           `json:"auth_blocked"`
 	Check          *ResourceCheck `json:"check,omitempty"`
 	ID             string         `json:"id"`
 	Name           string         `json:"name"`
@@ -76,7 +78,7 @@ func (s *Store) openSecret(id string, data []byte, value any) error {
 }
 func (s *Store) RefundSettings(ctx context.Context) (RefundSettings, error) {
 	var v RefundSettings
-	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID, &v.MotherIntervalSeconds, &v.Recovery)
+	err := s.Pool.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery,mother_failover FROM refund_settings WHERE id").Scan(&v.Enabled, &v.MaxParallel, &v.LoginAttempts, &v.RetrySeconds, &v.ChildProxyID, &v.MotherIntervalSeconds, &v.Recovery, &v.MotherFailover)
 	return v, err
 }
 func (s *Store) ProviderReady(ctx context.Context) bool {
@@ -84,12 +86,17 @@ func (s *Store) ProviderReady(ctx context.Context) bool {
 		return false
 	}
 	var ready bool
-	_ = s.Pool.QueryRow(ctx, `SELECT enabled AND EXISTS(SELECT 1 FROM refund_proxies p WHERE p.id=child_proxy_id AND p.enabled) AND EXISTS(SELECT 1 FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id WHERE m.enabled AND p.enabled) FROM refund_settings WHERE id`).Scan(&ready)
+	_ = s.Pool.QueryRow(ctx, `SELECT enabled AND EXISTS(SELECT 1 FROM refund_proxies p WHERE p.id=child_proxy_id AND p.enabled) AND EXISTS(SELECT 1 FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id WHERE m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now()) AND (m.auth_failed_fingerprint IS NULL OR m.auth_failed_fingerprint<>md5(m.secret))) FROM refund_settings WHERE id`).Scan(&ready)
 	return ready
 }
 func (s *Store) SetRefundRuntimeAvailable(v bool) { s.runtimeReady.Store(v) }
 func (s *Store) RefundRuntimeAvailable() bool     { return s.runtimeReady.Load() }
 func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSettings) error {
+	if v.MotherFailover != nil {
+		if err := v.MotherFailover.Validate(); err != nil {
+			return err
+		}
+	}
 	if v.Recovery != nil {
 		if err := v.Recovery.Validate(); err != nil {
 			return err
@@ -134,7 +141,7 @@ func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSe
 			return invalid("请先配置并启用母号与代理")
 		}
 	}
-	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),mother_interval_seconds=$6,recovery=COALESCE($7::jsonb,recovery),updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID, v.MotherIntervalSeconds, v.Recovery)
+	_, err = tx.Exec(ctx, "UPDATE refund_settings SET enabled=$1,max_parallel=$2,login_attempts=$3,retry_seconds=$4,child_proxy_id=NULLIF($5,''),mother_interval_seconds=$6,recovery=COALESCE($7::jsonb,recovery),mother_failover=COALESCE($8::jsonb,mother_failover),updated_at=now() WHERE id", v.Enabled, v.MaxParallel, v.LoginAttempts, v.RetrySeconds, v.ChildProxyID, v.MotherIntervalSeconds, v.Recovery, v.MotherFailover)
 	if err == nil {
 		err = audit(ctx, tx, actor, "refund.settings", "settings", v)
 	}
@@ -161,7 +168,7 @@ func (s *Store) RefundProxies(ctx context.Context) ([]RefundProxy, error) {
 	return out, rows.Err()
 }
 func (s *Store) RefundMothers(ctx context.Context) ([]RefundMother, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.enabled,COALESCE(e.refund_id,''),COALESCE(r.email,''),COALESCE(r.status,''),m.refresh_secret IS NOT NULL,m.plan_type,m.token_expires_at,m.check_json FROM refund_mothers m LEFT JOIN refund_execution e ON e.mother_id=m.id AND NOT e.released LEFT JOIN refunds r ON r.id=e.refund_id ORDER BY m.name,m.id`)
+	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.enabled,COALESCE(e.refund_id,''),COALESCE(r.email,''),COALESCE(r.status,''),m.refresh_secret IS NOT NULL,m.plan_type,m.token_expires_at,m.check_json,COALESCE(m.auth_failed_fingerprint=md5(m.secret),false) FROM refund_mothers m LEFT JOIN refund_execution e ON e.mother_id=m.id AND NOT e.released LEFT JOIN refunds r ON r.id=e.refund_id ORDER BY m.name,m.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +177,7 @@ func (s *Store) RefundMothers(ctx context.Context) ([]RefundMother, error) {
 	for rows.Next() {
 		var v RefundMother
 		v.HasSecret = true
-		if err = rows.Scan(&v.ID, &v.Name, &v.Email, &v.TeamID, &v.ProxyID, &v.SeatType, &v.Enabled, &v.ActiveRefund, &v.ActiveEmail, &v.ActiveStatus, &v.HasRefresh, &v.PlanType, &v.TokenExpiresAt, &v.Check); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.Email, &v.TeamID, &v.ProxyID, &v.SeatType, &v.Enabled, &v.ActiveRefund, &v.ActiveEmail, &v.ActiveStatus, &v.HasRefresh, &v.PlanType, &v.TokenExpiresAt, &v.Check, &v.AuthBlocked); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

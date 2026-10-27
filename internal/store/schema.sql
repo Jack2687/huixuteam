@@ -121,6 +121,10 @@ ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS child_proxy_id TEXT REFERE
 ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS refresh_secret BYTEA;
 ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS plan_type TEXT NOT NULL DEFAULT '';
 ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS auth_failed_fingerprint TEXT;
+ALTER TABLE refund_settings ADD COLUMN IF NOT EXISTS mother_failover JSONB NOT NULL DEFAULT '{"enabled":true,"max_switches":3,"retry_seconds":30}';
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS mother_switch_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS failed_mothers TEXT[] NOT NULL DEFAULT '{}';
 
 ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS code_secret BYTEA;
 ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;

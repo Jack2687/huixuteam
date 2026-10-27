@@ -10,18 +10,19 @@ import (
 )
 
 type RefundJob struct {
-	RecoveryMode     string                 `json:"recovery_mode"`
-	PersonalBaseline *PersonalSnapshot      `json:"personal_baseline"`
-	ID               string                 `json:"id"`
-	UserID           string                 `json:"-"`
-	LeaseToken       string                 `json:"-"`
-	Step             string                 `json:"step"`
-	ChildUserID      string                 `json:"child_user_id"`
-	Account          refundprovider.Account `json:"account"`
-	Mother           RefundMother           `json:"mother"`
-	ChildProxy       string                 `json:"child_proxy"`
-	MotherProxy      string                 `json:"mother_proxy"`
-	Settings         RefundSettings         `json:"settings"`
+	MotherFingerprint string                 `json:"-"`
+	RecoveryMode      string                 `json:"recovery_mode"`
+	PersonalBaseline  *PersonalSnapshot      `json:"personal_baseline"`
+	ID                string                 `json:"id"`
+	UserID            string                 `json:"-"`
+	LeaseToken        string                 `json:"-"`
+	Step              string                 `json:"step"`
+	ChildUserID       string                 `json:"child_user_id"`
+	Account           refundprovider.Account `json:"account"`
+	Mother            RefundMother           `json:"mother"`
+	ChildProxy        string                 `json:"child_proxy"`
+	MotherProxy       string                 `json:"mother_proxy"`
+	Settings          RefundSettings         `json:"settings"`
 }
 
 // ClaimRefund serializes allocation in the database, not in process memory.
@@ -36,7 +37,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		return nil, err
 	}
 	var cfg RefundSettings
-	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID, &cfg.MotherIntervalSeconds, &cfg.Recovery); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT enabled,max_parallel,login_attempts,retry_seconds,COALESCE(child_proxy_id,''),mother_interval_seconds,recovery,mother_failover FROM refund_settings WHERE id").Scan(&cfg.Enabled, &cfg.MaxParallel, &cfg.LoginAttempts, &cfg.RetrySeconds, &cfg.ChildProxyID, &cfg.MotherIntervalSeconds, &cfg.Recovery, &cfg.MotherFailover); err != nil {
 		return nil, err
 	}
 	recoveryEnabled := cfg.Recovery != nil && cfg.Recovery.Enabled
@@ -100,8 +101,51 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 		return nil, tx.Commit(ctx)
 	}
-	// Preserve this request's selected child exit across retries. Accepted jobs
-	// only need the mother's exit to finish cleanup, even if the global exit is off.
+	if !existing {
+		if !cfg.Enabled {
+			return nil, nil
+		}
+		// Only new reservations wait. Persisted completion times survive restarts;
+		// the latest setting also applies to mothers already between requests.
+		// New and safely reassigned requests share one FIFO queue. A waiting switch
+		// consumes no worker/mother and retains its original child proxy and fee.
+		failoverEnabled := cfg.MotherFailover != nil && cfg.MotherFailover.Enabled
+		err = tx.QueryRow(ctx, `SELECT r.id,r.user_id,m.id,COALESCE(e.child_proxy_id,NULLIF($3,''),'')
+ FROM refunds r JOIN users u ON u.id=r.user_id LEFT JOIN refund_execution e ON e.refund_id=r.id
+ JOIN LATERAL (
+  SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
+  WHERE m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now())
+  AND (m.auth_failed_fingerprint IS NULL OR m.auth_failed_fingerprint<>md5(m.secret))
+  AND NOT (m.id=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
+  AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released)
+  AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND done.completed_at>now()-($1 * interval '1 second'))
+  ORDER BY m.updated_at,m.id LIMIT 1
+ ) m ON true
+ WHERE r.status='queued' AND NOT u.disabled
+ AND (e.refund_id IS NULL OR ($2 AND e.released AND e.step='assigned' AND e.recovery_mode='mother_switch' AND e.next_attempt_at<=now()))
+ AND EXISTS(SELECT 1 FROM refund_proxies cp WHERE cp.id=COALESCE(e.child_proxy_id,NULLIF($3,'')) AND cp.enabled)
+ AND NOT EXISTS(SELECT 1 FROM refund_execution other JOIN refunds old ON old.id=other.refund_id
+  WHERE lower(old.email)=lower(r.email) AND (NOT other.released OR other.accepted_at IS NOT NULL))
+ ORDER BY r.created_at,r.id LIMIT 1`, cfg.MotherIntervalSeconds, failoverEnabled, cfg.ChildProxyID).Scan(&job.ID, &job.UserID, &job.Mother.ID, &childProxyID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err = transitionTx(ctx, tx, job.UserID, job.ID, "processing", "开始处理"); err != nil {
+			if errors.Is(err, ErrState) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		job.Step = "assigned"
+		if _, err = tx.Exec(ctx, `INSERT INTO refund_execution(refund_id,mother_id,child_proxy_id) VALUES($1,$2,NULLIF($3,''))
+ ON CONFLICT(refund_id) DO UPDATE SET mother_id=excluded.mother_id,released=false,recovery_mode='',next_attempt_at=NULL
+ WHERE refund_execution.released AND refund_execution.step='assigned' AND refund_execution.recovery_mode='mother_switch'`, job.ID, job.Mother.ID, childProxyID); err != nil {
+			return nil, err
+		}
+	}
 	if childProxyID == "" {
 		childProxyID = cfg.ChildProxyID
 	}
@@ -118,47 +162,12 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 			return nil, err
 		}
 	}
-	if !existing {
-		if !cfg.Enabled {
-			return nil, nil
-		}
-		// Only new reservations wait. Persisted completion times survive restarts;
-		// the latest setting also applies to mothers already between requests.
-		err = tx.QueryRow(ctx, `SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
-			WHERE m.enabled AND p.enabled
-			AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.mother_id=m.id AND NOT e.released)
-			AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.mother_id=m.id AND e.completed_at>now()-($1 * interval '1 second'))
-			ORDER BY m.updated_at,m.id LIMIT 1`, cfg.MotherIntervalSeconds).Scan(&job.Mother.ID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		err = tx.QueryRow(ctx, `SELECT r.id,r.user_id FROM refunds r JOIN users u ON u.id=r.user_id WHERE r.status='queued' AND NOT u.disabled AND NOT EXISTS(SELECT 1 FROM refund_execution e WHERE e.refund_id=r.id) AND NOT EXISTS(SELECT 1 FROM refund_execution e JOIN refunds old ON old.id=e.refund_id WHERE lower(old.email)=lower(r.email) AND (NOT e.released OR e.accepted_at IS NOT NULL)) ORDER BY r.created_at,r.id LIMIT 1`).Scan(&job.ID, &job.UserID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err = transitionTx(ctx, tx, job.UserID, job.ID, "processing", "开始处理"); err != nil {
-			if errors.Is(err, ErrState) {
-				return nil, nil
-			}
-			return nil, err
-		}
-		job.Step = "assigned"
-		if _, err = tx.Exec(ctx, "INSERT INTO refund_execution(refund_id,mother_id,child_proxy_id) VALUES($1,$2,NULLIF($3,''))", job.ID, job.Mother.ID, childProxyID); err != nil {
-			return nil, err
-		}
-	}
 	job.LeaseToken = Token()
 	if _, err = tx.Exec(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1", job.ID, job.LeaseToken, childProxyID); err != nil {
 		return nil, err
 	}
 	var motherSecret, proxySecret, accountSecret []byte
-	err = tx.QueryRow(ctx, `SELECT m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.secret,p.secret,r.credentials FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id JOIN refunds r ON r.id=$2 WHERE m.id=$1`, job.Mother.ID, job.ID).Scan(&job.Mother.Name, &job.Mother.Email, &job.Mother.TeamID, &job.Mother.ProxyID, &job.Mother.SeatType, &motherSecret, &proxySecret, &accountSecret)
+	err = tx.QueryRow(ctx, `SELECT m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.secret,p.secret,r.credentials,md5(m.secret) FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id JOIN refunds r ON r.id=$2 WHERE m.id=$1`, job.Mother.ID, job.ID).Scan(&job.Mother.Name, &job.Mother.Email, &job.Mother.TeamID, &job.Mother.ProxyID, &job.Mother.SeatType, &motherSecret, &proxySecret, &accountSecret, &job.MotherFingerprint)
 	if err != nil {
 		return nil, err
 	}

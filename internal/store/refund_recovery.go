@@ -45,6 +45,8 @@ type RefundDiagnostic struct {
 }
 
 var recoveryReasons = map[string]string{
+	"mother_preflight_auth":    "服务资源授权已失效，尚未开始办理",
+	"mother_preflight_failed":  "服务资源连接未通过，尚未开始办理",
 	"export_uncertain":         "处理结果未明确，正在核实",
 	"export_rejected":          "本次请求未受理",
 	"export_not_sent":          "连接未建立，请求尚未发送",
@@ -194,8 +196,14 @@ func (s *Store) FinishRefundAttempt(ctx context.Context, j *RefundJob, d RefundD
 		return nil
 	}
 	// Read current settings, including changes made while an attempt was running.
-	if err = tx.QueryRow(ctx, "SELECT recovery,retry_seconds FROM refund_settings WHERE id").Scan(&j.Settings.Recovery, &j.Settings.RetrySeconds); err != nil {
+	if err = tx.QueryRow(ctx, "SELECT recovery,retry_seconds,mother_failover FROM refund_settings WHERE id").Scan(&j.Settings.Recovery, &j.Settings.RetrySeconds, &j.Settings.MotherFailover); err != nil {
 		return err
+	}
+	if handled, e := scheduleMotherFailover(ctx, tx, j, step, d); handled || e != nil {
+		if e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
 	}
 	if err = scheduleRefundRecovery(ctx, tx, j, step, d); err != nil {
 		return err
@@ -204,6 +212,7 @@ func (s *Store) FinishRefundAttempt(ctx context.Context, j *RefundJob, d RefundD
 }
 
 type RefundRecoveryView struct {
+	Switches  int        `json:"switches"`
 	Pending   bool       `json:"pending"`
 	Running   bool       `json:"running"`
 	Alert     bool       `json:"alert"`
@@ -227,10 +236,12 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 	var v RefundRecoveryView
 	var mode string
 	var raw []byte
-	var released, enabled bool
+	var released, enabled, switchEnabled bool
+	var status string
 	err := q.QueryRow(ctx, `SELECT e.recovery_mode,e.recovery_started_at,e.next_attempt_at,e.retry_count,e.verify_count,e.cleanup_count,e.last_diagnostic,e.released,
- COALESCE(e.lease_until>now(),false),NOT e.released AND COALESCE(e.recovery_started_at<=now()-((s.recovery->>'alert_seconds')::int * interval '1 second'),false),(s.recovery->>'enabled')::boolean
- FROM refund_execution e CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled)
+ COALESCE(e.lease_until>now(),false),(NOT e.released OR e.recovery_mode='mother_switch') AND COALESCE(e.recovery_started_at<=now()-((s.recovery->>'alert_seconds')::int * interval '1 second'),false),(s.recovery->>'enabled')::boolean,
+ e.mother_switch_count,s.enabled AND (s.mother_failover->>'enabled')::boolean,r.status
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled, &v.Switches, &switchEnabled, &status)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -244,10 +255,18 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 		v.NextAt = nil
 		v.Label = "自动恢复已暂停"
 	}
-	if released {
+	if released && !(mode == "mother_switch" && status == "queued") {
 		v.Label = "处理已结束"
 		v.NextAt = nil
 		v.Alert = false
+	}
+	if mode == "mother_switch" && status == "queued" {
+		v.Pending = switchEnabled
+		v.Label = "排队等待可用资源"
+		if !switchEnabled {
+			v.Label = "换号调度已暂停"
+			v.NextAt = nil
+		}
 	}
 	var d RefundDiagnostic
 	_ = json.Unmarshal(raw, &d)

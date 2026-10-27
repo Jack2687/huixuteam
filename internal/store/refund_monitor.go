@@ -96,9 +96,10 @@ func (s *Store) AdminRefundMonitor(ctx context.Context, f RefundMonitorFilter) (
 	const query = `WITH scoped AS (
  SELECT r.id,r.email,r.status,r.fee,r.fee_status,r.message,r.created_at,r.updated_at,
  u.id AS user_id,u.name AS user_name,u.email AS user_email,p.started_at,
- COALESCE(NOT e.released AND e.recovery_started_at<=now()-((cfg.recovery->>'alert_seconds')::int * interval '1 second'),false) AS recovery_alert,
- COALESCE(NOT e.released AND e.recovery_mode<>'' AND ((e.next_attempt_at IS NOT NULL AND (cfg.recovery->>'enabled')::boolean) OR e.lease_until>now()),false) AS recovery_pending,
- CASE WHEN NOT e.released AND (cfg.recovery->>'enabled')::boolean THEN e.next_attempt_at END AS next_check_at,
+ COALESCE((NOT e.released OR (r.status='queued' AND e.recovery_mode='mother_switch')) AND e.recovery_started_at<=now()-((cfg.recovery->>'alert_seconds')::int * interval '1 second'),false) AS recovery_alert,
+ COALESCE((NOT e.released AND e.recovery_mode<>'' AND ((e.next_attempt_at IS NOT NULL AND (cfg.recovery->>'enabled')::boolean) OR e.lease_until>now())) OR
+ (r.status='queued' AND e.recovery_mode='mother_switch' AND cfg.enabled AND (cfg.mother_failover->>'enabled')::boolean),false) AS recovery_pending,
+ CASE WHEN (NOT e.released AND (cfg.recovery->>'enabled')::boolean) OR (r.status='queued' AND e.recovery_mode='mother_switch' AND cfg.enabled AND (cfg.mother_failover->>'enabled')::boolean) THEN e.next_attempt_at END AS next_check_at,
  CASE WHEN r.status IN ('succeeded','failed','banned','cancelled') THEN r.updated_at END AS finished_at
  FROM refunds r JOIN users u ON u.id=r.user_id LEFT JOIN refund_execution e ON e.refund_id=r.id CROSS JOIN refund_settings cfg
  LEFT JOIN LATERAL (SELECT min(created_at) AS started_at FROM refund_events

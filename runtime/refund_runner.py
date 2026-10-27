@@ -126,6 +126,15 @@ class MotherClient:
             "seat_type": self.mother["seat_type"], "submission_id": str(uuid.uuid4()),
         })
 
+    def preflight(self):
+        # Always before the first invitation checkpoint. This GET cannot create
+        # an invitation; a failure here is safe to return to the shared queue.
+        try:
+            self.find("users")
+        except UpstreamFailure as exc:
+            code = "mother_preflight_auth" if exc.status == 401 else "mother_preflight_failed"
+            raise UpstreamFailure(code, exc.status, exc.network_code) from None
+
     def remove(self, child_id):
         row = self.find("users")
         if row is None:
@@ -165,6 +174,8 @@ def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=Cust
     mother = None
     try:
         mother = mother_factory(job)
+        if step == "assigned" and mode != "cleanup":
+            mother.preflight()
         if mode == "cleanup" and not accepted:
             checkpoint("cleanup_started")
             mother.cleanup_unaccepted(child_id)

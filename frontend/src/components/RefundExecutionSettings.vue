@@ -6,12 +6,12 @@ import type { ResourceCheck } from "../lib/resource-check";
 import Modal from "./Modal.vue";
 import RefundDetail from "./RefundDetail.vue";
 type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
-type Mother = { check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
+type Mother = { auth_blocked?:boolean; check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
 type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
 type Recovery={enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
-type Settings = { recovery:Recovery; enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
+type Settings = { mother_failover:{enabled:boolean;max_switches:number;retry_seconds:number}; recovery:Recovery; enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
 const emit=defineEmits<{toast:[message:string]}>();
-const settings=ref<Settings>({recovery:{enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
+const settings=ref<Settings>({mother_failover:{enabled:true,max_switches:3,retry_seconds:30},recovery:{enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
 const intervalText=(key:'verify_intervals'|'cleanup_intervals')=>computed({get:()=>settings.value.recovery[key].join(', '),set:(value:string)=>{settings.value.recovery[key]=value.split(/[,，\s]+/).filter(Boolean).map(Number)}});
 const verifyIntervals=intervalText('verify_intervals'),cleanupIntervals=intervalText('cleanup_intervals');
 const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
@@ -67,7 +67,7 @@ async function checkMother(row?:Mother){
  try{
   if(!row&&mother.value.session?.trim()&&!await parseMother())return;
   const result=await api<ResourceCheck>("/api/admin/refund-mothers/check",{method:"POST",body:JSON.stringify(row?{id:row.id}:motherInput())});
-  if(row){row.check=result}else{motherCheck.value=result}
+  if(row){row.check=result;await load()}else{motherCheck.value=result}
   if(result.valid)emit("toast",`${result.message} · ${result.latency_ms} ms`);
   else if(row)error.value=result.message;else formError.value=result.message;
  }catch(e){if(row)error.value=(e as Error).message;else formError.value=(e as Error).message}finally{busy.value=false}
@@ -110,6 +110,16 @@ onMounted(load);
     <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；结果待核实的请求不会自动重复发送。</p>
     <p class="muted">接单间隔从同母号上一单成功完成后开始计算，默认 0 秒，不额外等待。保存后对正在等待的母号立即生效；到期后在下一轮调度（约 2 秒内）接单，其他空闲母号照常办理，已开始的任务及续跑不受影响。</p>
     <fieldset class="recovery-settings">
+     <legend>母号异常自动换号</legend>
+     <label class="checkbox-label"><input v-model="settings.mother_failover.enabled" type="checkbox"/>开始办理前母号不可用时，重新排队换母号</label>
+     <div class="form-row">
+      <label>每笔申请最多换母号次数<input v-model.number="settings.mother_failover.max_switches" type="number" min="0" max="10" required/></label>
+      <label>换母号前等待（秒）<input v-model.number="settings.mother_failover.retry_seconds" type="number" min="5" max="3600" required/></label>
+     </div>
+     <p class="muted">默认开启，最多换 3 次，每次等待 30 秒。按原申请提交时间排队，遵守并行上限和同母号接单间隔；没有可用母号就继续等待，不占执行并发，也不重复冻结费用。已开始邀请或办理的申请保留原母号，避免重复操作。</p>
+     <p class="muted">凭证过期或授权失效的母号不再接新单，更新凭证或校验通过后恢复。关闭此开关会暂停等待换号的申请。</p>
+    </fieldset>
+    <fieldset class="recovery-settings">
      <legend>异常恢复与占用告警</legend>
      <label class="checkbox-label"><input v-model="settings.recovery.enabled" type="checkbox"/>启用自动恢复与只读核实</label>
      <div class="form-row">
@@ -128,7 +138,7 @@ onMounted(load);
   <section class="table-card">
    <div class="section-title"><div><h2>母号管理</h2><p>在此维护母号与对应资源，申请人只需提交自己的账号资料。</p></div><button class="button primary" :disabled="busy" @click="editMother()">录入母号</button></div>
    <div class="table-scroll"><table><thead><tr><th>母号</th><th>团队 / 席位</th><th>代理</th><th>校验 / 席位（剩余 / 总数）</th><th>状态</th><th>当前申请</th><th>操作</th></tr></thead><tbody>
-    <tr v-for="m in mothers" :key="m.id"><td><strong>{{m.name}}</strong><small class="block">{{m.email}}</small><small v-if="m.plan_type" class="block">{{m.plan_type}}</small></td><td>{{m.team_id}}<small class="block">{{m.seat_type==='default'?'标准席位':'高级席位（prolite）'}}</small><small v-if="m.token_expires_at" class="block">AT 到期：{{displayTime(m.token_expires_at)}}</small><small v-if="m.has_refresh" class="block">RT 已加密保存</small></td><td>{{proxies.find(p=>p.id===m.proxy_id)?.name||'专属代理不可用'}}</td><td><ResourceCheckSummary :check="m.check" mother/></td><td><span class="badge" :class="m.enabled?'green':'gray'">{{m.enabled?'启用':'停用'}}</span></td><td><button v-if="m.active_refund" class="link" @click="detail=m.active_refund">{{m.active_email}} · {{statuses[m.active_status||'']?.label||'处理中'}}</button><span v-else>空闲</span></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkMother(m)">校验 / 刷新席位</button><button class="button secondary" :disabled="busy" @click="editMother(m)">编辑</button><button class="button secondary danger" :disabled="busy||!!m.active_refund" @click="removing={kind:'mothers',id:m.id,name:m.name};modal='delete';formError=''">删除</button></div></td></tr>
+    <tr v-for="m in mothers" :key="m.id"><td><strong>{{m.name}}</strong><small class="block">{{m.email}}</small><small v-if="m.plan_type" class="block">{{m.plan_type}}</small></td><td>{{m.team_id}}<small class="block">{{m.seat_type==='default'?'标准席位':'高级席位（prolite）'}}</small><small v-if="m.token_expires_at" class="block">AT 到期：{{displayTime(m.token_expires_at)}}</small><small v-if="m.has_refresh" class="block">RT 已加密保存</small></td><td>{{proxies.find(p=>p.id===m.proxy_id)?.name||'专属代理不可用'}}</td><td><ResourceCheckSummary :check="m.check" mother/></td><td><span class="badge" :class="m.enabled?'green':'gray'">{{m.enabled?'启用':'停用'}}</span><small v-if="m.auth_blocked" class="block form-error">授权失效，暂停接单</small><small v-else-if="m.token_expires_at&amp;&amp;new Date(m.token_expires_at).getTime()&lt;=Date.now()" class="block form-error">凭证过期，暂停接单</small></td><td><button v-if="m.active_refund" class="link" @click="detail=m.active_refund">{{m.active_email}} · {{statuses[m.active_status||'']?.label||'处理中'}}</button><span v-else>空闲</span></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkMother(m)">校验 / 刷新席位</button><button class="button secondary" :disabled="busy" @click="editMother(m)">编辑</button><button class="button secondary danger" :disabled="busy||!!m.active_refund" @click="removing={kind:'mothers',id:m.id,name:m.name};modal='delete';formError=''">删除</button></div></td></tr>
     <tr v-if="!mothers.length"><td colspan="7" class="empty-state">请先录入网络出口，再录入母号资源。</td></tr>
    </tbody></table></div>
    <p class="execution-footnote">需要协助的申请会保留资源占用，处理后才能办理后续申请。已产生历史记录的母号只能停用。</p>

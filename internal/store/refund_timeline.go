@@ -167,6 +167,9 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 			continue
 		}
 		switch e.message {
+		case "资源暂不可用，已重新排队等待调度。":
+			interrupt(e.at)
+			add("候", "排队中", e.at, false, "等待资源后继续办理")
 		case "已安排自动核实，不重复提交。", "已安排按间隔从原阶段续办。", "已安排资源清理及结果核对。", "自动恢复已暂停，需人工核实。":
 			interrupt(e.at)
 		case "正在只读核实本次处理结果。":

@@ -81,7 +81,7 @@ func (s *Store) SaveResourceCheck(ctx context.Context, actor, kind, id string, s
 	// Do not replace a newer check or attach old diagnostics to changed settings.
 	query := `UPDATE refund_proxies SET check_json=$2 WHERE id=$1 AND updated_at<=$3 AND (check_json IS NULL OR (check_json->>'checked_at')::timestamptz<=$3)`
 	if kind == "mother" {
-		query = `UPDATE refund_mothers m SET check_json=$2 WHERE id=$1 AND updated_at<=$3 AND EXISTS(SELECT 1 FROM refund_proxies p WHERE p.id=m.proxy_id AND p.updated_at<=$3) AND (check_json IS NULL OR (check_json->>'checked_at')::timestamptz<=$3)`
+		query = `UPDATE refund_mothers m SET check_json=$2,auth_failed_fingerprint=CASE WHEN ($2::jsonb->>'valid')::boolean THEN NULL WHEN $2::jsonb->>'code'='unauthorized' THEN md5(m.secret) ELSE auth_failed_fingerprint END WHERE id=$1 AND updated_at<=$3 AND EXISTS(SELECT 1 FROM refund_proxies p WHERE p.id=m.proxy_id AND p.updated_at<=$3) AND (check_json IS NULL OR (check_json->>'checked_at')::timestamptz<=$3)`
 	} else if kind != "proxy" {
 		return ErrInvalid
 	}

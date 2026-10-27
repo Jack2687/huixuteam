@@ -10,6 +10,26 @@ from manager_oauth import bridge
 
 
 class RunnerTests(unittest.TestCase):
+    def test_preflight_failure_never_invites_or_logs_in(self):
+        mother=Mock();login=Mock();steps=[]
+        mother.preflight.side_effect=runner.UpstreamFailure('mother_preflight_auth',401)
+        result=runner.execute(self.job(),lambda method,*a:steps.append(method),lambda _:mother,login)
+        self.assertEqual(result['code'],'mother_preflight_auth')
+        self.assertEqual(result['http_status'],401)
+        self.assertEqual(steps,[])
+        mother.invite.assert_not_called();mother.remove.assert_not_called();login.assert_not_called()
+
+    def test_preflight_is_read_only_and_only_initial(self):
+        with patch.object(runner.requests,'Session'):
+            c=runner.MotherClient(self.job());c.call=Mock(side_effect=runner.UpstreamFailure('mother_http',401))
+            with self.assertRaises(runner.UpstreamFailure) as result:c.preflight()
+            self.assertEqual(result.exception.code,'mother_preflight_auth')
+            self.assertEqual(c.call.call_args.args[0],'GET')
+        mother=Mock();mother.invite.side_effect=runner.UpstreamFailure('mother_http',401)
+        result=runner.execute(self.job('inviting'),lambda *a:None,lambda _:mother)
+        self.assertEqual(result['code'],'mother_http')
+        mother.preflight.assert_not_called()
+
     def job(self, step="assigned"):
         return {"id":"fixture", "step":step, "child_user_id":"child-user",
                 "account":{"email":"child@example.com", "password":"private-password", "totp_secret":"JBSWY3DPEHPK3PXP"},
