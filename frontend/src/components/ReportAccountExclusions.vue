@@ -44,7 +44,7 @@ onUnmounted(()=>{controller?.abort();clearTimeout(timer)});
     <p v-if="!items.length">没有匹配的账号</p>
    </div>
    <div class="exclusion-footer"><span>已选 {{selected.length}} 个 · 最多 200 个</span><div v-if="total>50"><button type="button" :disabled="page===1||loading" @click="page--">上一页</button><span>{{page}}/{{Math.ceil(total/50)}}</span><button type="button" :disabled="page*50>=total||loading" @click="page++">下一页</button></div></div>
-   <small class="exclusion-note">选中后自动更新汇总与明细，不修改账号数据。</small>
+   <small class="exclusion-note">选中后自动更新汇总与明细，并在当前浏览器记住此管理员的选择。</small>
   </div>
  </details>
 </template>

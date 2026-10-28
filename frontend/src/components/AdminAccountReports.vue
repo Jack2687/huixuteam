@@ -8,11 +8,38 @@ type Metrics = { recharged:number; debited:number; freeze_added:number; released
 type Row = Metrics & { id:string; name:string; email:string; role:string; disabled:boolean; service_fee:number };
 type Report = { items:Row[]; summary:Metrics; total:number; page:number; size:number; start:string; end:string; generated_at:string };
 type Period = 'day'|'week'|'month'|'year';
+type ExcludedAccount = {id:string;name:string;email:string};
+const props=defineProps<{userId:string}>();
+const preferenceKey=`huixu.account-report-exclusions.v1:${props.userId}`;
+const persistenceError=ref('');
+function readExclusions():{excludeAdmin:boolean;accounts:ExcludedAccount[]}{
+ try{
+  const saved=JSON.parse(localStorage.getItem(preferenceKey)||'null');
+  if(saved&&typeof saved.excludeAdmin==='boolean'&&Array.isArray(saved.accounts)){
+   const seen=new Set<string>();
+   const accounts:ExcludedAccount[]=saved.accounts.filter((v:unknown):v is ExcludedAccount=>{
+    if(!v||typeof v!=='object')return false;
+    const item=v as ExcludedAccount;
+    if(typeof item.id!=='string'||! /^[a-f0-9]{32}$/.test(item.id)||seen.has(item.id)||typeof item.email!=='string'||item.email.length>254||typeof item.name!=='string'||item.name.length>80)return false;
+    seen.add(item.id);return true;
+   }).slice(0,200).map(({id,name,email}:ExcludedAccount)=>({id,name,email}));
+   return {excludeAdmin:saved.excludeAdmin,accounts};
+  }
+ }catch{/* A stale or unavailable browser preference must not break reports. */}
+ return {excludeAdmin:true,accounts:[]};
+}
+const savedExclusions=readExclusions();
 const periods:{key:Period;label:string}[] = [{key:'day',label:'每日'},{key:'week',label:'每周'},{key:'month',label:'每月'},{key:'year',label:'每年'}];
 const today = () => new Date(Date.now()+8*3600000).toISOString().slice(0,10);
-const period=ref<Period>('day'), anchor=ref(today()), excludeAdmin=ref(true), search=ref(''), query=ref('');
+const period=ref<Period>('day'), anchor=ref(today()), excludeAdmin=ref(savedExclusions.excludeAdmin), search=ref(''), query=ref('');
 const page=ref(1), size=ref(100), loading=ref(false), error=ref(''), report=ref<Report>();
-const excludedAccounts=ref<{id:string;name:string;email:string}[]>([]);
+const excludedAccounts=ref<ExcludedAccount[]>(savedExclusions.accounts);
+watch([excludeAdmin,excludedAccounts],()=>{
+ try{
+  localStorage.setItem(preferenceKey,JSON.stringify({excludeAdmin:excludeAdmin.value,accounts:excludedAccounts.value.map(({id,name,email})=>({id,name,email}))}));
+  persistenceError.value='';
+ }catch{persistenceError.value='浏览器未允许保存筛选，刷新后可能需要重新选择。'}
+},{flush:'sync'});
 const range=computed(()=>report.value ? (report.value.start===report.value.end ? report.value.start : `${report.value.start} 至 ${report.value.end}`) : '');
 let controller:AbortController|undefined;
 async function load(){
@@ -51,6 +78,7 @@ const roles:Record<string,string>={admin:'管理员',operator:'运营人员',mem
    <form class="report-search" @submit.prevent="query=search.trim()"><input v-model="search" aria-label="搜索报表账户" placeholder="搜索姓名或邮箱" maxlength="254"/><button class="button secondary" type="submit">查询</button></form>
   </div>
   <div v-if="error" class="error-banner" role="alert">{{error}}<button @click="load">重试</button></div>
+  <p v-if="persistenceError" class="error-banner" role="status">{{persistenceError}}</p>
   <p v-if="loading" class="report-loading" role="status">正在汇总账户数据…</p>
   <template v-if="report">
    <div class="report-caption"><strong>{{range}}</strong><span>北京时间 · 周一为每周起点 · {{report.total}} 个账户{{excludeAdmin?'（已排除管理员）':''}}{{excludedAccounts.length?` · 额外排除 ${excludedAccounts.length} 个账号`:''}}</span></div>

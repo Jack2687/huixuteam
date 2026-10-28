@@ -34,6 +34,9 @@ try:
         request('/api/admin/users/'+user['id']+'/credit','POST',{'amount':amount,'note':'isolated report QA'})
         people.append({**user,'email':email})
     baseline=request('/api/admin/reports/accounts?size=1')
+    owner=request('/api/auth/me')
+    preference='huixu.account-report-exclusions.v1:'+owner['id']
+    evaluate('localStorage.removeItem('+json.dumps(preference)+')')
     click('运营控制台');click('账户报表','tab');wait_report(baseline['total'])
     evaluate('document.querySelector(".account-exclusions summary").click()')
     fill('搜索可排除账号','report-exclusion-','searchbox');batch(['wait','600'])
@@ -45,6 +48,23 @@ try:
     assert filtered['summary']['balance']==baseline['summary']['balance']-3300
     assert evaluate('document.querySelector(".report-metrics section strong").textContent')==str(filtered['summary']['recharged']/100).removesuffix('.0')
     shot('desktop-selected')
+    # Unmounting and a full reload must restore preferences before querying.
+    click('运营概况','tab');click('账户报表','tab');wait_report(baseline['total']-2)
+    assert '额外排除 2 个账号' in text()
+    batch(['reload']);expect('运营控制台');click('账户报表','tab');wait_report(baseline['total']-2)
+    assert '额外排除 2 个账号' in text()
+    # A different administrator does not inherit these exclusions.
+    admin_email='report-admin-'+suffix+'@example.test'
+    admin_password='Isolated-Admin-2026-'+suffix
+    second=request('/api/admin/users','POST',{'email':admin_email,'name':'独立管理员','password':admin_password,'role':'admin','service_fee':3000})
+    request('/api/auth/logout','POST')
+    request('/api/auth/login','POST',{'email':admin_email,'password':admin_password})
+    batch(['reload']);expect('运营控制台');click('账户报表','tab');wait_report(baseline['total'])
+    assert '额外排除 2 个账号' not in text()
+    request('/api/auth/logout','POST')
+    request('/api/auth/login','POST',{'email':CONFIG['BOOTSTRAP_EMAIL'],'password':CONFIG['BOOTSTRAP_PASSWORD']})
+    batch(['reload']);expect('运营控制台');click('账户报表','tab');wait_report(baseline['total']-2)
+    assert '额外排除 2 个账号' in text()
     evaluate('document.querySelector(".account-exclusions").open=false')
     click('每月');wait_report(baseline['total']-2)
     assert '额外排除 2 个账号' in text()
@@ -58,9 +78,11 @@ try:
     shot('mobile-selected')
     click('清空');wait_report(baseline['total'])
     assert '额外排除 2 个账号' not in text()
+    batch(['reload']);expect('运营控制台');click('账户报表','tab');wait_report(baseline['total'])
+    assert '额外排除 2 个账号' not in text()
     batch(['set','viewport','1600','1050']);shot('desktop-cleared')
     assert request('/api/admin/refund-settings')['settings']['enabled'] is False
-    result={'passed':True,'multi_select':True,'search':True,'summary_and_rows':True,'period_keeps_selection':True,'admin_filter_composes':True,'clear':True,'mobile_overflow':False,'scope':'isolated QA only'}
+    result={'passed':True,'multi_select':True,'search':True,'summary_and_rows':True,'period_keeps_selection':True,'admin_filter_composes':True,'clear':True,'refresh_persists':True,'navigation_persists':True,'admin_isolation':True,'clear_persists':True,'mobile_overflow':False,'scope':'isolated QA only'}
     (ARTIFACTS/'result.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     print(json.dumps(result),flush=True)
 finally:
