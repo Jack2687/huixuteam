@@ -83,7 +83,7 @@ class PasswordFailureTests(unittest.TestCase):
             client.find = Mock(side_effect=[None, invite, None, None, None, None])
             client.call = Mock(side_effect=runner.UpstreamFailure('mother_network', network_code=28) if response_lost else None)
             client.cleanup_unaccepted('')
-            client.call.assert_called_once_with('DELETE', '/invites/invite-1')
+            client.call.assert_called_once_with('DELETE', '/invites', {'email_address': 'child@example.com'})
             self.assertEqual(client.find.call_count, 6)
 
     def test_invite_identity_guard_and_remaining_invite(self):
@@ -106,7 +106,7 @@ class PasswordFailureTests(unittest.TestCase):
         client.find = Mock(side_effect=[None, invite, member, member, None, None, None])
         client.call = Mock()
         client.cleanup_unaccepted('')
-        self.assertEqual([c.args for c in client.call.call_args_list], [('DELETE', '/invites/invite-1'), ('DELETE', '/users/new-child')])
+        self.assertEqual([c.args for c in client.call.call_args_list], [('DELETE', '/invites', {'email_address': 'child@example.com'}), ('DELETE', '/users/new-child')])
 
 
 if __name__ == '__main__':

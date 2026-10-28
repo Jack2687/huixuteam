@@ -169,7 +169,7 @@ class MotherClient:
                 raise UpstreamFailure("member_identity")
             failure = None
             try:
-                self.call("DELETE", "/invites/" + quote(identity, safe=""))
+                self.call("DELETE", "/invites", {"email_address": self.email})
             except UpstreamFailure as exc:
                 failure = exc
             # A DELETE response (including 2xx/404) is not proof of absence.

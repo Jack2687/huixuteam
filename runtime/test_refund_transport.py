@@ -129,6 +129,9 @@ class ProxyFlow:
                 self.invited = True
                 return 200, {}, {}
             if method == "DELETE" and path == prefix + "/invites/invite-child":
+                return 405, {"detail": "Method Not Allowed"}, {}
+            if method == "DELETE" and path == prefix + "/invites":
+                assert data == {"email_address": email}
                 self.invited = False
                 return 200, {}, {}
             if method == "DELETE" and path == prefix + "/users/child-user":
@@ -239,7 +242,7 @@ class ProxyTransportTests(unittest.TestCase):
         self.assertEqual([s for s in checkpoints if s != 'diagnostic'], ['inviting', 'invited', 'login', 'password_failed', 'cleanup_started', 'cleanup_completed'])
         self.assertFalse(any(path.endswith("export_and_deactivate") or '/users/' in path or '/mfa/' in path for _, _, path, _, _ in fixture.records))
         self.assertEqual(sum(path.endswith('/password/verify') for _, _, path, _, _ in fixture.records), 1)
-        self.assertEqual([(role, path) for role, method, path, _, _ in fixture.records if method == 'DELETE'], [('mother', '/backend-api/accounts/fixture-team/invites/invite-child')])
+        self.assertEqual([(role, path) for role, method, path, _, _ in fixture.records if method == 'DELETE'], [('mother', '/backend-api/accounts/fixture-team/invites')])
 
 
 if __name__ == "__main__": unittest.main()
