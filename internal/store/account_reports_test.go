@@ -113,3 +113,73 @@ func TestAccountReportLedgerAndApplications(t *testing.T) {
 		t.Fatal("month aggregation failed", r)
 	}
 }
+
+func TestAccountReportMultipleExclusionsAcrossPeriods(t *testing.T) {
+	s := testutil.Database(t)
+	a := testutil.Admin(t, s)
+	first := testutil.Member(t, s, a, "exclude-first@test.invalid", "member")
+	second := testutil.Member(t, s, a, "exclude-second@test.invalid", "member")
+	keep := testutil.Member(t, s, a, "keep-report@test.invalid", "member")
+	ctx := context.Background()
+	for _, item := range []struct {
+		u      store.User
+		amount int64
+	}{{first, 10000}, {second, 12000}, {keep, 7000}, {a, 9000}} {
+		if err := s.AdminCredit(ctx, a.ID, item.u.ID, "fund-"+item.u.ID, item.amount, "report test funding"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, _, err := s.CreateRefunds(ctx, first.ID, "excluded-refund", []refundprovider.Account{account("excluded-account@test.invalid")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"processing", "succeeded"} {
+		if err = s.Transition(ctx, first.ID, ids[0], status, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = s.Pool.Exec(ctx, "UPDATE ledger SET created_at='2026-10-28T04:00:00Z'; UPDATE refunds SET created_at='2026-10-28T04:00:00Z'"); err != nil {
+		t.Fatal(err)
+	}
+	for _, period := range []string{"day", "week", "month", "year"} {
+		for _, excludeAdmin := range []bool{false, true} {
+			for _, page := range []int{1, 2} {
+				r, err := s.AdminAccountReport(ctx, period, "2026-10-28", "", excludeAdmin, page, 1, first.ID, second.ID, a.ID, first.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := store.AccountReportMetrics{Recharged: 7000, Balance: 7000, Available: 7000}
+				if r.Total != 1 || r.Summary != want || len(r.ExcludedUserIDs) != 3 {
+					t.Fatalf("incorrect excluded summary %+v", r)
+				}
+				if page == 1 && (len(r.Items) != 1 || r.Items[0].ID != keep.ID) {
+					t.Fatal("excluded row returned", r.Items)
+				}
+				if page == 2 && len(r.Items) != 0 {
+					t.Fatal("wrong pagination", r.Items)
+				}
+			}
+		}
+	}
+	r, err := s.AdminAccountReport(ctx, "day", "2026-10-28", "EXCLUDE", true, 1, 100, first.ID, second.ID)
+	if err != nil || r.Total != 0 || r.Summary != (store.AccountReportMetrics{}) {
+		t.Fatal("search bypassed exclusions", r, err)
+	}
+	r, err = s.AdminAccountReport(ctx, "day", "2026-10-28", "", true, 1, 100)
+	if err != nil || r.Total != 3 || r.Summary.Recharged != 29000 || r.Summary.Used != 3000 || r.Summary.SettledCount != 1 {
+		t.Fatal("clearing filter did not restore original totals", r, err)
+	}
+	for _, invalid := range [][]string{{""}, {"not-an-id"}, make([]string, 201)} {
+		if _, err = s.AdminAccountReport(ctx, "day", "2026-10-28", "", true, 1, 100, invalid...); err == nil {
+			t.Fatal("invalid exclusions accepted")
+		}
+	}
+	opts, err := s.AdminAccountReportOptions(ctx, "EXCLUDE", true, 1)
+	if err != nil || opts.Total != 2 || len(opts.Items) != 2 {
+		t.Fatal("options search", opts, err)
+	}
+	opts, err = s.AdminAccountReportOptions(ctx, "", false, 2)
+	if err != nil || opts.Total != 4 || len(opts.Items) != 0 {
+		t.Fatal("options pagination", opts, err)
+	}
+}

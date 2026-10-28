@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -64,22 +65,85 @@ type AccountReportRow struct {
 	ServiceFee int64  `json:"service_fee"`
 }
 type AccountReport struct {
-	Items        []AccountReportRow   `json:"items"`
-	Summary      AccountReportMetrics `json:"summary"`
-	Total        int                  `json:"total"`
-	Page         int                  `json:"page"`
-	Size         int                  `json:"size"`
-	Period       string               `json:"period"`
-	Start        string               `json:"start"`
-	End          string               `json:"end"` // inclusive calendar label
-	Timezone     string               `json:"timezone"`
-	GeneratedAt  time.Time            `json:"generated_at"`
-	ExcludeAdmin bool                 `json:"exclude_admin"`
+	Items           []AccountReportRow   `json:"items"`
+	Summary         AccountReportMetrics `json:"summary"`
+	Total           int                  `json:"total"`
+	Page            int                  `json:"page"`
+	Size            int                  `json:"size"`
+	Period          string               `json:"period"`
+	Start           string               `json:"start"`
+	End             string               `json:"end"` // inclusive calendar label
+	Timezone        string               `json:"timezone"`
+	GeneratedAt     time.Time            `json:"generated_at"`
+	ExcludeAdmin    bool                 `json:"exclude_admin"`
+	ExcludedUserIDs []string             `json:"excluded_user_ids"`
+}
+
+var reportAccountID = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func reportExclusions(ids []string) ([]string, error) {
+	if len(ids) > 200 {
+		return nil, invalid("最多排除 200 个账户")
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if !reportAccountID.MatchString(id) {
+			return nil, invalid("排除账户参数无效")
+		}
+		if !seen[id] {
+			out = append(out, id)
+			seen[id] = true
+		}
+	}
+	return out, nil
+}
+
+type AccountReportOption struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+type AccountReportOptions struct {
+	Items []AccountReportOption `json:"items"`
+	Total int                   `json:"total"`
+}
+
+// The selector shares report permissions and includes historical accounts,
+// but exposes no credentials, balances or account-management capability.
+func (s *Store) AdminAccountReportOptions(ctx context.Context, q string, excludeAdmin bool, page int) (AccountReportOptions, error) {
+	q = strings.TrimSpace(q)
+	if len(q) > 254 {
+		return AccountReportOptions{}, invalid("搜索内容过长")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > 100000 {
+		page = 100000
+	}
+	const query = `WITH selected AS (
+ SELECT id,name,email FROM users WHERE (NOT $2 OR role<>'admin')
+ AND ($1='' OR position(lower($1) in lower(email||' '||name))>0)
+), page AS (SELECT * FROM selected ORDER BY email,id LIMIT 50 OFFSET $3)
+ SELECT jsonb_build_object('items',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY email,id) FROM page p),'[]'::jsonb),'total',(SELECT count(*) FROM selected))`
+	var raw []byte
+	if err := s.Pool.QueryRow(ctx, query, q, excludeAdmin, (page-1)*50).Scan(&raw); err != nil {
+		return AccountReportOptions{}, err
+	}
+	var out AccountReportOptions
+	err := json.Unmarshal(raw, &out)
+	return out, err
 }
 
 // Aggregate each ledger/refund independently before joining users. A single SQL
 // snapshot keeps paginated items and the full filtered summary consistent.
-func (s *Store) AdminAccountReport(ctx context.Context, period, anchor, q string, excludeAdmin bool, page, size int) (AccountReport, error) {
+func (s *Store) AdminAccountReport(ctx context.Context, period, anchor, q string, excludeAdmin bool, page, size int, excludedIDs ...string) (AccountReport, error) {
+	excludedIDs, err := reportExclusions(excludedIDs)
+	if err != nil {
+		return AccountReport{}, err
+	}
 	now := time.Now()
 	start, end, err := AccountReportPeriod(period, anchor, now)
 	if err != nil {
@@ -104,6 +168,7 @@ func (s *Store) AdminAccountReport(ctx context.Context, period, anchor, q string
 	const query = `WITH selected AS (
  SELECT id,name,email,role,disabled,service_fee,balance,frozen,balance-frozen AS available FROM users
  WHERE (NOT $4 OR role<>'admin') AND ($3='' OR position(lower($3) in lower(email||' '||name))>0)
+ AND NOT (id=ANY($7::text[]))
 ), funds AS (
  SELECT l.user_id,
  COALESCE(sum(amount) FILTER (WHERE kind IN ('credit','redeem')),0) AS recharged,
@@ -142,7 +207,7 @@ func (s *Store) AdminAccountReport(ctx context.Context, period, anchor, q string
  SELECT jsonb_build_object('items',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY used DESC,recharged DESC,email,id) FROM page p),'[]'::jsonb),
  'total',(SELECT count(*) FROM report),'summary',(SELECT to_jsonb(t) FROM totals t))`
 	var raw []byte
-	if err := s.Pool.QueryRow(ctx, query, start, end, q, excludeAdmin, size, (page-1)*size).Scan(&raw); err != nil {
+	if err := s.Pool.QueryRow(ctx, query, start, end, q, excludeAdmin, size, (page-1)*size, excludedIDs).Scan(&raw); err != nil {
 		return AccountReport{}, err
 	}
 	var result AccountReport
@@ -152,5 +217,6 @@ func (s *Store) AdminAccountReport(ctx context.Context, period, anchor, q string
 	result.Page, result.Size, result.Period = page, size, period
 	result.Start, result.End = start.Format("2006-01-02"), end.AddDate(0, 0, -1).Format("2006-01-02")
 	result.Timezone, result.GeneratedAt, result.ExcludeAdmin = "Asia/Shanghai", now, excludeAdmin
+	result.ExcludedUserIDs = excludedIDs
 	return result, nil
 }

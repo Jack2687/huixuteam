@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { api, money, date as formatTime } from '../lib/api';
 import Icon from './Icon.vue';
 import Pagination from './Pagination.vue';
+import ReportAccountExclusions from './ReportAccountExclusions.vue';
 type Metrics = { recharged:number; debited:number; freeze_added:number; released:number; used:number; settled_count:number; balance:number; frozen:number; available:number; applications:number; queued:number; processing:number; succeeded:number; attention:number; failed:number; cancelled:number };
 type Row = Metrics & { id:string; name:string; email:string; role:string; disabled:boolean; service_fee:number };
 type Report = { items:Row[]; summary:Metrics; total:number; page:number; size:number; start:string; end:string; generated_at:string };
@@ -11,6 +12,7 @@ const periods:{key:Period;label:string}[] = [{key:'day',label:'每日'},{key:'we
 const today = () => new Date(Date.now()+8*3600000).toISOString().slice(0,10);
 const period=ref<Period>('day'), anchor=ref(today()), excludeAdmin=ref(true), search=ref(''), query=ref('');
 const page=ref(1), size=ref(100), loading=ref(false), error=ref(''), report=ref<Report>();
+const excludedAccounts=ref<{id:string;name:string;email:string}[]>([]);
 const range=computed(()=>report.value ? (report.value.start===report.value.end ? report.value.start : `${report.value.start} 至 ${report.value.end}`) : '');
 let controller:AbortController|undefined;
 async function load(){
@@ -19,13 +21,14 @@ async function load(){
  try {
   if(!anchor.value)throw Error('请选择统计日期');
   const params=new URLSearchParams({period:period.value,date:anchor.value,q:query.value,exclude_admin:String(excludeAdmin.value),page:String(page.value),size:String(size.value)});
+  for(const account of excludedAccounts.value)params.append('exclude_user_id',account.id);
   const data=await api<Report>(`/api/admin/reports/accounts?${params}`,{signal:current.signal});
   if(controller===current)report.value=data;
- } catch(e){if((e as Error).name!=='AbortError')error.value=(e as Error).message}
+ } catch(e){if(controller===current&&(e as Error).name!=='AbortError')error.value=(e as Error).message}
  finally{if(controller===current)loading.value=false}
 }
-watch([period,anchor,excludeAdmin,query,size],()=>{page.value=1},{flush:'sync'});
-watch([period,anchor,excludeAdmin,query,page,size],load,{immediate:true});
+watch([period,anchor,excludeAdmin,excludedAccounts,query,size],()=>{page.value=1},{flush:'sync'});
+watch([period,anchor,excludeAdmin,excludedAccounts,query,page,size],load,{immediate:true});
 onUnmounted(()=>controller?.abort());
 function shift(direction:number){
  const d=new Date(`${report.value?.start||anchor.value}T00:00:00Z`);
@@ -44,12 +47,13 @@ const roles:Record<string,string>={admin:'管理员',operator:'运营人员',mem
    <label class="report-date">统计日期<input v-model="anchor" aria-label="统计日期" type="date" min="1900-01-01" max="9998-12-31"/></label>
    <div class="report-navigation"><button class="button secondary" :disabled="loading||!report" @click="shift(-1)">上一期</button><button class="button secondary" @click="anchor===today()?load():anchor=today()">本期</button><button class="button secondary" :disabled="loading||!report" @click="shift(1)">下一期</button></div>
    <label class="report-exclude"><input v-model="excludeAdmin" type="checkbox"/>排除管理员账号</label>
+   <ReportAccountExclusions v-model="excludedAccounts" :exclude-admin="excludeAdmin"/>
    <form class="report-search" @submit.prevent="query=search.trim()"><input v-model="search" aria-label="搜索报表账户" placeholder="搜索姓名或邮箱" maxlength="254"/><button class="button secondary" type="submit">查询</button></form>
   </div>
   <div v-if="error" class="error-banner" role="alert">{{error}}<button @click="load">重试</button></div>
   <p v-if="loading" class="report-loading" role="status">正在汇总账户数据…</p>
   <template v-if="report">
-   <div class="report-caption"><strong>{{range}}</strong><span>北京时间 · 周一为每周起点 · {{report.total}} 个账户{{excludeAdmin?'（已排除管理员）':''}}</span></div>
+   <div class="report-caption"><strong>{{range}}</strong><span>北京时间 · 周一为每周起点 · {{report.total}} 个账户{{excludeAdmin?'（已排除管理员）':''}}{{excludedAccounts.length?` · 额外排除 ${excludedAccounts.length} 个账号`:''}}</span></div>
    <div class="report-metrics">
     <section><span>期间充值</span><strong>{{money(report.summary.recharged)}}</strong><small>人工入账 + 兑换入账 · 人工扣减 {{money(report.summary.debited)}}</small></section>
     <section><span>当前冻结</span><strong>{{money(report.summary.frozen)}}</strong><small>期间新增 {{money(report.summary.freeze_added)}} · 释放 {{money(report.summary.released)}}</small></section>

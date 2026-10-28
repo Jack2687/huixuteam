@@ -42,7 +42,18 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 			fail(w, 400, "管理员筛选参数无效")
 			return
 		}
-		data, err := s.DB.AdminAccountReport(r.Context(), q.Get("period"), q.Get("date"), q.Get("q"), exclude != "false", p, size)
+		data, err := s.DB.AdminAccountReport(r.Context(), q.Get("period"), q.Get("date"), q.Get("q"), exclude != "false", p, size, q["exclude_user_id"]...)
+		s.result(w, data, err)
+	}))
+	m.Handle("GET /api/admin/reports/accounts/options", s.require("admin.reports.read", func(w http.ResponseWriter, r *http.Request) {
+		p, _ := pagination(r)
+		q := r.URL.Query()
+		exclude := q.Get("exclude_admin")
+		if exclude != "" && exclude != "true" && exclude != "false" {
+			fail(w, 400, "管理员筛选参数无效")
+			return
+		}
+		data, err := s.DB.AdminAccountReportOptions(r.Context(), q.Get("q"), exclude != "false", p)
 		s.result(w, data, err)
 	}))
 	m.Handle("GET /api/admin/overview", s.require("admin.overview.read", func(w http.ResponseWriter, r *http.Request) {
