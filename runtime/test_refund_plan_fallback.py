@@ -39,7 +39,12 @@ class PersonalProxyFlow(ProxyFlow):
         if url.path in {"/backend-api/me", "/backend-api/accounts/check/v4-2023-04-27"}:
             assert role == "child" and method == "GET" and headers["Authorization"] == "Bearer "+self.token
             if url.path.endswith("/me"): return 200, {"email":email}, {}
-            return 200, {"accounts":{"personal":{"account":{"account_id":"personal","structure":"personal"},"entitlement":{"subscription_plan":self.plan}}}}, {}
+            account = {"account_id":"personal","structure":"personal"}
+            entitlement = {"subscription_plan":self.plan}
+            if isinstance(self.plan, dict):
+                account.update(self.plan["account"])
+                entitlement = self.plan["entitlement"]
+            return 200, {"accounts":{"personal":{"account":account,"entitlement":entitlement}}}, {}
         return super().reply(role, method, url, headers, raw)
 
 
@@ -52,7 +57,7 @@ class FallbackTests(unittest.TestCase):
 
     def test_plan_requires_exact_live_personal_identity_and_explicit_value(self):
         def payload(value):
-            return {"accounts": {"personal": {"account": {"account_id": "personal", "structure": "personal", "plan_type": "pro"}, "entitlement": {"subscription_plan": value}}}}
+            return {"accounts": {"personal": {"account": {"account_id": "personal", "structure": "personal"}, "entitlement": {"subscription_plan": value}}}}
         self.assertEqual(fallback.parse_plan(payload("chatgptfreeplan"), "personal"), "free")
         self.assertEqual(fallback.parse_plan(payload("chatgptproplan"), "personal"), "paid")
         for data in [{}, {"accounts": {}}, payload("future-plan"), payload("chatgptteamplan")]:
@@ -61,6 +66,40 @@ class FallbackTests(unittest.TestCase):
         data["accounts"]["personal"]["account"]["structure"] = "workspace"
         with self.assertRaises(ValueError): fallback.parse_plan(data, "personal")
         with self.assertRaises(ValueError): fallback.parse_plan(payload("chatgptfreeplan"), "different")
+
+    def test_current_free_without_subscription_overrides_retained_plan(self):
+        for retained in ("chatgptpro", "chatgptproplan", "chatgptplus", "future-plan", None):
+            data = {"accounts":{"personal":{
+                "account":{"account_id":"personal","structure":"personal","plan_type":"free","plan_display_name":"Free"},
+                "entitlement":{"has_active_subscription":False,"subscription_plan":retained}}}}
+            self.assertEqual(fallback.parse_plan(data,"personal"),"free")
+
+    def test_active_paid_aliases_and_ambiguous_plan_signals(self):
+        def payload(current, retained, active):
+            return {"accounts":{"personal":{
+                "account":{"account_id":"personal","structure":"personal","plan_type":current},
+                "entitlement":{"has_active_subscription":active,"subscription_plan":retained}}}}
+        for current, retained in (("pro","chatgptpro"),("plus","chatgptplus"),("prolite","chatgptprolite"),("go","chatgptgoplan")):
+            self.assertEqual(fallback.parse_plan(payload(current,retained,True),"personal"),"paid")
+        for current, retained, active in (("free","chatgptpro",True),("pro","chatgptpro",False),
+                ("free","chatgptpro",None),("pro","chatgptfreeplan",None),
+                (None,"chatgptpro",False),(None,None,False),("future-plan",None,False),
+                ("free","chatgptpro","false"),("free","chatgptpro",0)):
+            with self.subTest(current=current,retained=retained,active=active),self.assertRaises(ValueError):
+                fallback.parse_plan(payload(current,retained,active),"personal")
+
+    def test_retained_paid_label_completes_real_proxy_fallback_without_resubmit(self):
+        job=self.job();events=[]
+        plan={"account":{"plan_type":"free","plan_display_name":"Free"},
+              "entitlement":{"has_active_subscription":False,"subscription_plan":"chatgptpro"}}
+        with PersonalProxyFlow(job,plan) as fixture:
+            result=runner.execute(job,lambda name,*_:events.append(name))
+        self.assertEqual(fixture.errors,[])
+        self.assertTrue(result["ok"])
+        self.assertEqual(events.count("fallback_free"),1)
+        self.assertNotIn("fallback_paid",events)
+        self.assertTrue(any(r[2]=="/backend-api/me" for r in fixture.records))
+        self.assertFalse(any(r[1]=="POST" and (r[2].endswith("/invites") or r[2].endswith("export_and_deactivate")) for r in fixture.records))
 
     def test_free_completes_after_removal_and_fresh_login_paid_only_schedules(self):
         for plan in ("free", "paid"):

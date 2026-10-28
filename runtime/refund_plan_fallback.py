@@ -71,16 +71,39 @@ def parse_plan(data, account_id):
     entitlement = item.get("entitlement") or {}
     if not isinstance(entitlement, dict):
         raise ValueError("invalid entitlement")
-    aliases = {"chatgptfreeplan": "free", "chatgptplusplan": "plus", "chatgptproplan": "pro", "chatgptproliteplan": "prolite"}
-    raw = entitlement.get("subscription_plan") or entitlement.get("plan_type") or account.get("plan_type")
-    if not isinstance(raw, str):
-        raise ValueError("missing plan")
-    plan = aliases.get(raw.lower(), raw.lower())
-    if plan == "free":
+    aliases = {"chatgptfreeplan": "free", "chatgptfree": "free",
+               "chatgptplusplan": "plus", "chatgptplus": "plus",
+               "chatgptproplan": "pro", "chatgptpro": "pro",
+               "chatgptproliteplan": "prolite", "chatgptprolite": "prolite",
+               "chatgptgoplan": "go", "chatgptgo": "go", "pro_lite": "prolite"}
+
+    def normalize(raw):
+        if raw is None or raw == "":
+            return None
+        if not isinstance(raw, str):
+            raise ValueError("invalid plan")
+        value = aliases.get(raw.strip().lower(), raw.strip().lower())
+        if value not in {"free", "plus", "pro", "prolite", "go"}:
+            raise ValueError("unknown personal plan")
+        return value
+
+    active = entitlement.get("has_active_subscription")
+    if active is not None and not isinstance(active, bool):
+        raise ValueError("invalid subscription state")
+    current = normalize(account.get("plan_type"))
+    # A cancelled/expired subscription can retain its old subscription_plan.
+    # Only explicit current Free plus boolean inactive may override that label.
+    if current == "free" and active is False:
         return "free"
-    if plan in {"plus", "pro", "prolite", "pro_lite", "go"}:
-        return "paid"
-    raise ValueError("unknown personal plan")
+    subscription = normalize(entitlement.get("subscription_plan") or entitlement.get("plan_type"))
+    if current and subscription and current != subscription:
+        raise ValueError("conflicting personal plan")
+    plan = current or subscription
+    if plan is None:
+        raise ValueError("missing plan")
+    if (active is True and plan == "free") or (active is False and plan != "free"):
+        raise ValueError("conflicting subscription state")
+    return "free" if plan == "free" else "paid"
 
 
 def check_plan(flow, session, job):
