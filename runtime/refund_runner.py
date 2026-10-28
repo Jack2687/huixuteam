@@ -181,13 +181,16 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
     step = job["step"]
     child_id = job.get("child_user_id") or ""
     accepted = step in {"accepted", "removing"}
-    if step == "submitting" and mode != "verify":
+    if step == "submitting" and mode not in {"verify", "fallback"}:
         return {"ok": False, "code": "export_uncertain"}
     if not job.get("mother_proxy") or (not accepted and mode != "cleanup" and not job.get("child_proxy")):
         return {"ok": False, "code": "proxy_missing"}
     mother = None
     try:
         mother = mother_factory(job)
+        if mode == "fallback":
+            from refund_plan_fallback import execute as fallback
+            return fallback(job, checkpoint, mother)
         if step == "assigned" and mode != "cleanup":
             mother.preflight()
         if mode == "cleanup" and not accepted:

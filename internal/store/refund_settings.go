@@ -119,6 +119,13 @@ func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSe
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(718374023)"); err != nil {
 		return err
 	}
+	// Older clients omit this nested setting. Preserve an explicit disabled or
+	// customized fallback instead of silently restoring defaults on next startup.
+	if v.Recovery != nil && v.Recovery.PlanFallback == nil {
+		if err = tx.QueryRow(ctx, "SELECT recovery->'plan_fallback' FROM refund_settings WHERE id FOR UPDATE").Scan(&v.Recovery.PlanFallback); err != nil {
+			return err
+		}
+	}
 	v.ChildProxyID = strings.TrimSpace(v.ChildProxyID)
 	if v.ChildProxyID != "" {
 		var available bool

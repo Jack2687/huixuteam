@@ -1,6 +1,7 @@
 """Pro-only Team login and export/deactivate; original login mechanics stay shared."""
 import time
 import diagnostics
+from curl_cffi import CurlInfo
 from urllib.parse import urlsplit, urljoin
 
 from . import bridge, upstream
@@ -8,6 +9,18 @@ from .adapter import ProjectProtocolLogin
 
 EXPORT_URL = "https://chatgpt.com/backend-api/accounts/export_and_deactivate"
 SAFARI_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+
+
+def tls_request_not_sent(exc):
+    response = getattr(exc, "response", None)
+    infos = getattr(response, "infos", None)
+    # Read the response's saved per-transfer info, never the reset/reused Curl
+    # handle or error text. A bare code 35 is insufficient for a destructive retry.
+    if getattr(exc, "code", None) != 35 or not isinstance(infos, dict):
+        return False
+    values = [getattr(response, "status_code", None), infos.get(CurlInfo.REQUEST_SIZE),
+              infos.get(CurlInfo.APPCONNECT_TIME_T), infos.get(CurlInfo.REDIRECT_COUNT)]
+    return all(type(value) is int and value == 0 for value in values)
 
 
 class TeamProtocolLogin(ProjectProtocolLogin):
@@ -95,6 +108,8 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         headers = {"Authorization": "Bearer " + token, "User-Agent": SAFARI_UA,
                    "Origin": "https://chatgpt.com", "Referer": "https://chatgpt.com", "oai-language": "zh-CN", "Accept": "application/json"}
         started = time.monotonic()
+        original_infos = self.web_session.curl_infos
+        self.web_session.curl_infos = list(dict.fromkeys([*original_infos, CurlInfo.REQUEST_SIZE, CurlInfo.APPCONNECT_TIME_T, CurlInfo.REDIRECT_COUNT]))
         diagnostics.request_event("export", "start")
         try:
             # Deliberately bypass login request retries; exactly one destructive POST.
@@ -108,12 +123,18 @@ class TeamProtocolLogin(ProjectProtocolLogin):
                           "evidence": diagnostics.exception_evidence(exc, "export")["evidence"],
                           "duration_ms": int((time.monotonic()-started)*1000)}
             # libcurl proxy/DNS/connect failures occur before the HTTPS request.
-            # Timeouts (28), send/receive/TLS loss are deliberately NOT replayed.
-            if network_code in {5, 6, 7}:
+            # TLS handshake failures are retryable only with per-transfer proof
+            # that no application request bytes or redirects were sent.
+            tls_not_sent = tls_request_not_sent(exc)
+            if tls_not_sent:
+                diagnostic["evidence"]["transport_state"] = "tls_before_request"
+            if network_code in {5, 6, 7} or tls_not_sent:
                 diagnostic.update(code="export_not_sent", retryable=True)
                 bridge.call("merge_v2_rejected", diagnostic=diagnostic)
                 return {"success": False, "retryable": True, "error_code": "export_not_sent", **diagnostic}
             return {"success": False, "retryable": False, "error_code": "export_uncertain", **diagnostic, "error": "导出停用请求中断，结果待确认，保留团队成员"}
+        finally:
+            self.web_session.curl_infos = original_infos
         try:
             data = resp.json()
         except (ValueError, TypeError):

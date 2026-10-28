@@ -43,6 +43,10 @@ func executionFixture(t *testing.T, parallel, mothers int) (*store.Store, store.
 	if err = s.SaveRefundSettings(ctx, a.ID, cfg); err != nil {
 		t.Fatal(err)
 	}
+	// This fixture explicitly exercises the legacy read-only verification mode.
+	if _, err = s.Pool.Exec(ctx, `UPDATE refund_settings SET recovery=jsonb_set(recovery,'{plan_fallback,enabled}','false')`); err != nil {
+		t.Fatal(err)
+	}
 	return s, a, u, cfg
 }
 

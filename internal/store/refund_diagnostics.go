@@ -9,6 +9,7 @@ import (
 
 // Strict enums are deliberate: upstream-controlled text never becomes a log.
 type RefundEvidence struct {
+	TransportState    string `json:"transport_state,omitempty"`
 	ProxyHTTPStatus   int    `json:"proxy_http_status,omitempty"`
 	Stage             string `json:"stage,omitempty"`
 	Side              string `json:"side,omitempty"`
@@ -43,15 +44,16 @@ func evidenceNumber(value, maximum int) int {
 	return value
 }
 func (v RefundEvidence) Sanitized() *RefundEvidence {
+	v.TransportState = evidenceEnum(v.TransportState, "tls_before_request")
 	v.ProxyHTTPStatus = evidenceNumber(v.ProxyHTTPStatus, 599)
-	v.Stage = evidenceEnum(v.Stage, "login csrf signin authorize identifier password mfa_challenge mfa_verify workspace callback session sentinel email_verification personal_check members_read invites_read invite_send member_remove mother_operation export runtime checkpoint")
+	v.Stage = evidenceEnum(v.Stage, "login csrf signin authorize identifier password mfa_challenge mfa_verify workspace callback session sentinel email_verification personal_check members_read invites_read invite_send member_remove mother_operation export runtime checkpoint fallback_remove fallback_login fallback_plan")
 	v.Side = evidenceEnum(v.Side, "child mother worker")
 	v.Event = evidenceEnum(v.Event, "start response error failure truncated")
 	v.Reason = evidenceEnum(v.Reason, evidenceReasons)
 	v.UpstreamCode = evidenceEnum(v.UpstreamCode, evidenceReasons)
 	v.Exception = evidenceEnum(v.Exception, "RuntimeError ValueError KeyError TypeError AttributeError ImportError ModuleNotFoundError TimeoutError OSError ConnectionError LoginFlowError DeadAccountError NeedsVerification UpstreamFailure VerificationUnavailable RequestsError ProxyError SSLError DNSError ConnectTimeout ReadTimeout ConnectionResetError JSONDecodeError other")
 	v.BodyKind = evidenceEnum(v.BodyKind, "json html text")
-	v.Source = evidenceEnum(v.Source, "refund_runner.py refund_recovery.py diagnostics.py adapter.py upstream.py merge_v2.py bridge.py tls.py sentinel_vm.py")
+	v.Source = evidenceEnum(v.Source, "refund_runner.py refund_recovery.py refund_plan_fallback.py diagnostics.py adapter.py upstream.py merge_v2.py bridge.py tls.py sentinel_vm.py")
 	v.Line = evidenceNumber(v.Line, 100000)
 	v.Sequence = evidenceNumber(v.Sequence, 128)
 	v.TransportAttempt = evidenceNumber(v.TransportAttempt, 10)

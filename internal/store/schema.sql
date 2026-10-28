@@ -144,6 +144,12 @@ ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS cleanup_count INTEGER NOT 
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS personal_baseline JSONB;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS last_diagnostic JSONB NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS refund_execution_recovery_due ON refund_execution(next_attempt_at) WHERE NOT released;
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_phase TEXT NOT NULL DEFAULT '';
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_cycles INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS completion_basis TEXT NOT NULL DEFAULT '';
+UPDATE refund_settings SET recovery=recovery || '{"plan_fallback":{"enabled":true,"max_cycles":2,"max_attempts":3,"retry_seconds":30}}'::jsonb
+ WHERE NOT recovery ? 'plan_fallback';
 CREATE TABLE IF NOT EXISTS refund_execution_diagnostics (
  id BIGSERIAL PRIMARY KEY, refund_id TEXT NOT NULL REFERENCES refunds(id),
  diagnostic JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()

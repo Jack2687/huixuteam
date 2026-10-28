@@ -156,7 +156,7 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 			case "申请需要跟进，请联系服务专员。":
 				interrupt(e.at)
 			case "退款服务已完成":
-				if last("移") >= 0 {
+				if last("移") >= 0 && out.Items[last("移")].Status == "进行中" {
 					finishStage("移", e.at, "已完成", "")
 				}
 				add("结", "已完成", e.at, true, "")
@@ -167,6 +167,25 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 			continue
 		}
 		switch e.message {
+		case "已安排移出后套餐兜底核验。":
+			interrupt(e.at)
+		case "兜底：正在移出本次账号。":
+			start("移", e.at)
+			out.Items[len(out.Items)-1].Reason = "待核实兜底：先移出再核验个人套餐"
+		case "兜底：已确认移出本次账号。":
+			finishStage("移", e.at, "已完成", "兜底移出已核实")
+		case "兜底：正在重新登录个人账号。":
+			start("登", e.at)
+			out.Items[len(out.Items)-1].Reason = "兜底：重新登录个人账号"
+		case "兜底：个人身份已确认，正在核验套餐。":
+			finishStage("登", e.at, "已完成", "个人账号身份已确认")
+			start("验", e.at)
+		case "兜底：个人套餐为 Free，按业务规则完成。":
+			finishStage("验", e.at, "已确认", "个人套餐为 Free，按业务规则完成；不代表退款到账")
+			finishStage("停", e.at, "已确认", "移出后套餐核验通过（兜底依据）")
+		case "兜底：个人套餐仍为付费，等待重新邀请办理。":
+			finishStage("验", e.at, "已确认", "个人套餐仍为付费")
+			add("复", "已安排", e.at, true, "按配置间隔重新邀请办理，保留原单与费用")
 		case "资源暂不可用，已重新排队等待调度。":
 			interrupt(e.at)
 			add("候", "排队中", e.at, false, "等待资源后继续办理")

@@ -10,6 +10,7 @@ import (
 )
 
 type RefundJob struct {
+	FallbackPhase     string                  `json:"fallback_phase"`
 	DiagnosticContext RefundDiagnosticContext `json:"-"`
 	MotherFingerprint string                  `json:"-"`
 	MotherAttemptKey  string                  `json:"-"`
@@ -43,6 +44,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		return nil, err
 	}
 	recoveryEnabled := cfg.Recovery != nil && cfg.Recovery.Enabled
+	fallbackEnabled := recoveryEnabled && cfg.Recovery.PlanFallback != nil && cfg.Recovery.PlanFallback.Enabled
 	var count int
 	if err = tx.QueryRow(ctx, "SELECT count(*) FROM refund_execution WHERE lease_until>now() AND NOT released").Scan(&count); err != nil {
 		return nil, err
@@ -53,13 +55,13 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 	job := &RefundJob{Settings: cfg}
 	// Recover an interrupted reservation first. Unknown submissions are never replayed.
 	var oldToken, childProxyID, previousStatus string
-	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,''),e.recovery_mode,e.personal_baseline,r.status
+	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,''),e.recovery_mode,e.personal_baseline,r.status,e.fallback_phase
  FROM refund_execution e JOIN refunds r ON r.id=e.refund_id JOIN refund_mothers m ON m.id=e.mother_id JOIN refund_proxies p ON p.id=m.proxy_id
  WHERE NOT e.released AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
- AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2)
+ AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR $3)
  AND (e.lease_until IS NULL OR e.lease_until<now()) AND m.enabled AND p.enabled
  AND (e.step IN ('accepted','removing') OR e.recovery_mode='cleanup' OR EXISTS(SELECT 1 FROM refund_proxies cp WHERE cp.id=COALESCE(e.child_proxy_id,NULLIF($1,'')) AND cp.enabled))
- ORDER BY COALESCE(e.next_attempt_at,e.updated_at),e.refund_id LIMIT 1`, cfg.ChildProxyID, recoveryEnabled).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID, &job.RecoveryMode, &job.PersonalBaseline, &previousStatus)
+ ORDER BY COALESCE(e.next_attempt_at,e.updated_at),e.refund_id LIMIT 1`, cfg.ChildProxyID, recoveryEnabled, fallbackEnabled).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID, &job.RecoveryMode, &job.PersonalBaseline, &previousStatus, &job.FallbackPhase)
 	existing := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -69,10 +71,10 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 			return nil, err
 		}
 		var live, released, eligible bool
-		if err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,e.recovery_mode,e.personal_baseline,COALESCE(e.lease_until>now(),false),e.released,r.status,
- (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2)
+		if err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,e.recovery_mode,e.personal_baseline,COALESCE(e.lease_until>now(),false),e.released,r.status,e.fallback_phase,
+ (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR $3)
  AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
- FROM refund_execution e JOIN refunds r ON r.id=e.refund_id WHERE e.refund_id=$1 FOR UPDATE OF r,e`, job.ID, recoveryEnabled).Scan(&job.Step, &oldToken, &job.RecoveryMode, &job.PersonalBaseline, &live, &released, &previousStatus, &eligible); err != nil {
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id WHERE e.refund_id=$1 FOR UPDATE OF r,e`, job.ID, recoveryEnabled, fallbackEnabled).Scan(&job.Step, &oldToken, &job.RecoveryMode, &job.PersonalBaseline, &live, &released, &previousStatus, &job.FallbackPhase, &eligible); err != nil {
 			return nil, err
 		}
 		// A finishing worker may have scheduled a later attempt while this claim
@@ -165,7 +167,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 		}
 	}
 	job.LeaseToken = Token()
-	if err = tx.QueryRow(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1 RETURNING retry_count,verify_count,cleanup_count", job.ID, job.LeaseToken, childProxyID).Scan(&job.DiagnosticContext.Retry, &job.DiagnosticContext.Verify, &job.DiagnosticContext.Cleanup); err != nil {
+	if err = tx.QueryRow(ctx, "UPDATE refund_execution SET lease_token=$2,lease_until=now()+interval '90 seconds',child_proxy_id=COALESCE(child_proxy_id,NULLIF($3,'')),next_attempt_at=NULL,retry_count=retry_count+CASE WHEN recovery_mode='retry' THEN 1 ELSE 0 END,verify_count=verify_count+CASE WHEN recovery_mode='verify' THEN 1 ELSE 0 END,cleanup_count=cleanup_count+CASE WHEN recovery_mode='cleanup' THEN 1 ELSE 0 END,fallback_attempts=fallback_attempts+CASE WHEN recovery_mode='fallback' THEN 1 ELSE 0 END,updated_at=now() WHERE refund_id=$1 RETURNING retry_count,verify_count,cleanup_count", job.ID, job.LeaseToken, childProxyID).Scan(&job.DiagnosticContext.Retry, &job.DiagnosticContext.Verify, &job.DiagnosticContext.Cleanup); err != nil {
 		return nil, err
 	}
 	var motherSecret, proxySecret, accountSecret []byte
@@ -231,6 +233,12 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 			return err
 		}
 	}
+	if strings.HasPrefix(c.Method, "fallback_") {
+		if err = planFallbackCheckpoint(ctx, tx, j, c, step); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
 	next, message := "", ""
 	switch c.Method {
 	case "personal_baseline":
@@ -286,6 +294,9 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		if step != "assigned" && step != "inviting" {
 			return ErrState
 		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET fallback_phase='' WHERE refund_id=$1 AND fallback_phase='reinvite'", j.ID); err != nil {
+			return err
+		}
 		next = "inviting"
 		message = "正在发送团队邀请。"
 	case "invited":
@@ -313,6 +324,9 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		if step != "ready" || c.TeamID != j.Mother.TeamID {
 			return ErrState
 		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET fallback_phase='',fallback_attempts=0 WHERE refund_id=$1", j.ID); err != nil {
+			return err
+		}
 		next = "submitting"
 		message = "正在提交导出并停用个人空间。"
 	case "merge_v2_rejected":
@@ -327,7 +341,7 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		}
 		next = "accepted"
 		message = "导出停用已受理，准备移出团队。"
-		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET accepted_at=COALESCE(accepted_at,now()) WHERE refund_id=$1", j.ID); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET accepted_at=COALESCE(accepted_at,now()),completion_basis='accepted' WHERE refund_id=$1", j.ID); err != nil {
 			return err
 		}
 	case "removing":
@@ -453,7 +467,7 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 			return ErrState
 		}
 		step = "accepted"
-		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET accepted_at=COALESCE(accepted_at,now()) WHERE refund_id=$1", id); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET accepted_at=COALESCE(accepted_at,now()),completion_basis='accepted' WHERE refund_id=$1", id); err != nil {
 			return err
 		}
 		message = "管理员已核实停用受理，将继续移出团队。"

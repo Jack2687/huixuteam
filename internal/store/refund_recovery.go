@@ -9,15 +9,21 @@ import (
 )
 
 type RefundRecoverySettings struct {
-	Enabled          bool  `json:"enabled"`
-	MaxRetries       int   `json:"max_retries"`
-	VerifyIntervals  []int `json:"verify_intervals"`
-	CleanupIntervals []int `json:"cleanup_intervals"`
-	AlertSeconds     int   `json:"alert_seconds"`
-	CleanupFailed    bool  `json:"cleanup_failed"`
+	PlanFallback     *PlanFallbackSettings `json:"plan_fallback,omitempty"`
+	Enabled          bool                  `json:"enabled"`
+	MaxRetries       int                   `json:"max_retries"`
+	VerifyIntervals  []int                 `json:"verify_intervals"`
+	CleanupIntervals []int                 `json:"cleanup_intervals"`
+	AlertSeconds     int                   `json:"alert_seconds"`
+	CleanupFailed    bool                  `json:"cleanup_failed"`
 }
 
 func (v RefundRecoverySettings) Validate() error {
+	if v.PlanFallback != nil {
+		if err := v.PlanFallback.Validate(); err != nil {
+			return err
+		}
+	}
 	if v.MaxRetries < 0 || v.MaxRetries > 10 || v.AlertSeconds < 60 || v.AlertSeconds > 86400 {
 		return invalid("自动重试须为 0～10 次，告警阈值须为 60～86400 秒")
 	}
@@ -48,6 +54,9 @@ type RefundDiagnostic struct {
 
 var recoveryReasons = map[string]string{
 	"protocol_trace":           "内部诊断记录",
+	"fallback_unavailable":     "兜底核验未完成，将按配置重试",
+	"fallback_paid":            "个人套餐仍为付费，已安排再次办理",
+	"fallback_free":            "个人套餐已核验为 Free，按配置完成服务",
 	"mother_preflight_auth":    "服务资源授权已失效，尚未开始办理",
 	"mother_preflight_failed":  "服务资源连接未通过，尚未开始办理",
 	"export_uncertain":         "处理结果未明确，正在核实",
@@ -127,15 +136,22 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	if err := recordDiagnostic(ctx, tx, j.ID, d); err != nil {
 		return err
 	}
-	var retries, checks, cleanups int
-	var mode string
-	if err := tx.QueryRow(ctx, "SELECT retry_count,verify_count,cleanup_count,recovery_mode FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&retries, &checks, &cleanups, &mode); err != nil {
+	var retries, checks, cleanups, fallbackCycles, fallbackAttempts int
+	var mode, fallbackPhase string
+	if err := tx.QueryRow(ctx, "SELECT retry_count,verify_count,cleanup_count,recovery_mode,fallback_cycles,fallback_attempts,fallback_phase FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&retries, &checks, &cleanups, &mode, &fallbackCycles, &fallbackAttempts, &fallbackPhase); err != nil {
 		return err
 	}
 	cfg := j.Settings.Recovery
 	nextMode, status, message, delay := "", "attention", "申请需要跟进，请联系服务专员。", 0
 	if cfg != nil && cfg.Enabled {
 		switch {
+		case step == "submitting" && cfg.PlanFallback != nil && cfg.PlanFallback.Enabled:
+			f := cfg.PlanFallback
+			if fallbackAttempts < f.MaxAttempts && (fallbackPhase != "" || fallbackCycles < f.MaxCycles) {
+				nextMode, delay = "fallback", f.RetrySeconds
+			}
+		case step == "submitting" && fallbackPhase != "":
+			// A removed child cannot use the old team-only verifier. Keep its phase.
 		case step == "submitting":
 			if checks < len(cfg.VerifyIntervals) {
 				nextMode = "verify"
@@ -145,6 +161,10 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 			if cleanups < len(cfg.CleanupIntervals) {
 				nextMode = "cleanup"
 				delay = cfg.CleanupIntervals[cleanups]
+			}
+		case fallbackPhase == "reinvite":
+			if cfg.PlanFallback != nil && cfg.PlanFallback.Enabled {
+				nextMode, delay = "retry", cfg.PlanFallback.RetrySeconds
 			}
 		case d.Retryable && retries < cfg.MaxRetries:
 			nextMode = "retry"
@@ -177,6 +197,9 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	}
 	if nextMode == "cleanup" {
 		internal = "已安排资源清理及结果核对。"
+	}
+	if nextMode == "fallback" {
+		internal = "已安排移出后套餐兜底核验。"
 	}
 	if _, err := tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,$2,true)", j.ID, internal); err != nil {
 		return err
@@ -221,6 +244,7 @@ func (s *Store) FinishRefundAttempt(ctx context.Context, j *RefundJob, d RefundD
 }
 
 type RefundRecoveryView struct {
+	Fallbacks int        `json:"fallbacks"`
 	Switches  int        `json:"switches"`
 	Pending   bool       `json:"pending"`
 	Running   bool       `json:"running"`
@@ -245,12 +269,13 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 	var v RefundRecoveryView
 	var mode string
 	var raw []byte
-	var released, enabled, switchEnabled bool
+	var released, enabled, switchEnabled, fallbackEnabled bool
+	var fallbackPhase string
 	var status string
 	err := q.QueryRow(ctx, `SELECT e.recovery_mode,e.recovery_started_at,e.next_attempt_at,e.retry_count,e.verify_count,e.cleanup_count,e.last_diagnostic,e.released,
  COALESCE(e.lease_until>now(),false),(NOT e.released OR e.recovery_mode='mother_switch') AND COALESCE(e.recovery_started_at<=now()-((s.recovery->>'alert_seconds')::int * interval '1 second'),false),(s.recovery->>'enabled')::boolean,
- e.mother_switch_count,s.enabled AND (s.mother_failover->>'enabled')::boolean,r.status
- FROM refund_execution e JOIN refunds r ON r.id=e.refund_id CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled, &v.Switches, &switchEnabled, &status)
+	 e.mother_switch_count,s.enabled AND (s.mother_failover->>'enabled')::boolean,r.status,e.fallback_cycles,COALESCE((s.recovery->'plan_fallback'->>'enabled')::boolean,false),e.fallback_phase
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled, &v.Switches, &switchEnabled, &status, &v.Fallbacks, &fallbackEnabled, &fallbackPhase)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -258,8 +283,8 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 		return nil, err
 	}
 	v.Pending = !released && (v.NextAt != nil || v.Running)
-	v.Label = map[string]string{"retry": "等待续办", "verify": "自动核实", "cleanup": "清理核对", "": "等待人工核实"}[mode]
-	if !released && !enabled && mode != "" && !v.Running {
+	v.Label = map[string]string{"retry": "等待续办", "verify": "自动核实", "cleanup": "清理核对", "fallback": "移出后套餐核验", "": "等待人工核实"}[mode]
+	if !released && (!enabled || ((mode == "fallback" || fallbackPhase == "reinvite") && !fallbackEnabled)) && mode != "" && !v.Running {
 		v.Pending = false
 		v.NextAt = nil
 		v.Label = "自动恢复已暂停"

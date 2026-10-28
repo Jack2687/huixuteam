@@ -20,6 +20,7 @@ func enableRecovery(t *testing.T, s *store.Store, a store.User) {
 		t.Fatal(err)
 	}
 	cfg.Recovery = &store.RefundRecoverySettings{Enabled: true, MaxRetries: 3, VerifyIntervals: []int{30, 60, 120, 300}, CleanupIntervals: []int{15, 30, 60}, AlertSeconds: 600, CleanupFailed: true}
+	cfg.Recovery.PlanFallback = &store.PlanFallbackSettings{Enabled: false, MaxCycles: 2, MaxAttempts: 3, RetrySeconds: 30}
 	if err = s.SaveRefundSettings(ctx, a.ID, cfg); err != nil {
 		t.Fatal(err)
 	}

@@ -8,10 +8,10 @@ import RefundDetail from "./RefundDetail.vue";
 type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
 type Mother = { auth_blocked?:boolean; check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
 type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
-type Recovery={enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
+type Recovery={plan_fallback?:{enabled:boolean;max_cycles:number;max_attempts:number;retry_seconds:number};enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
 type Settings = { mother_failover:{enabled:boolean;max_switches:number;retry_seconds:number}; recovery:Recovery; enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
 const emit=defineEmits<{toast:[message:string]}>();
-const settings=ref<Settings>({mother_failover:{enabled:true,max_switches:3,retry_seconds:30},recovery:{enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
+const settings=ref<Settings>({mother_failover:{enabled:true,max_switches:3,retry_seconds:30},recovery:{plan_fallback:{enabled:true,max_cycles:2,max_attempts:3,retry_seconds:30},enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
 const intervalText=(key:'verify_intervals'|'cleanup_intervals')=>computed({get:()=>settings.value.recovery[key].join(', '),set:(value:string)=>{settings.value.recovery[key]=value.split(/[,，\s]+/).filter(Boolean).map(Number)}});
 const verifyIntervals=intervalText('verify_intervals'),cleanupIntervals=intervalText('cleanup_intervals');
 const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
@@ -28,7 +28,7 @@ const proxyInput=()=>{const {check,...value}=proxy.value;return value};
 const displayTime=(value:string)=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
 async function load(){
  busy.value=true;error.value="";
- try{const d=await api<{settings:Settings;mothers:Mother[];proxies:ProxyRow[]}>("/api/admin/refund-settings");settings.value=d.settings;mothers.value=d.mothers;proxies.value=d.proxies}
+ try{const d=await api<{settings:Settings;mothers:Mother[];proxies:ProxyRow[]}>("/api/admin/refund-settings");settings.value=d.settings;settings.value.recovery.plan_fallback??={enabled:true,max_cycles:2,max_attempts:3,retry_seconds:30};mothers.value=d.mothers;proxies.value=d.proxies}
  catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 async function saveSettings(){
@@ -107,7 +107,7 @@ onMounted(load);
     </div>
     <label>子号全局代理<select v-model="settings.child_proxy_id" :required="settings.enabled"><option value="">请选择子号全局代理</option><option v-for="p in proxies" :key="p.id" :value="p.id" :disabled="!p.enabled">{{p.name}}{{p.enabled?'':'（已停用）'}}</option></select></label>
     <p class="muted">子号的全部请求固定使用全局代理，母号请求使用各自绑定的专属代理。修改全局选择只影响新申请，已领取的申请保留原出口；缺少可用代理时保留排队，不直连。</p>
-    <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；结果待核实的请求不会自动重复发送。</p>
+    <p class="muted">单个母号依次办理，不同母号可同时工作。暂停队列只阻止领取新申请，已经开始的任务继续运行；待核实申请按下方恢复和套餐兜底规则处理。</p>
     <p class="muted">接单间隔从同母号上一单成功完成后开始计算，默认 0 秒，不额外等待。保存后对正在等待的母号立即生效；到期后在下一轮调度（约 2 秒内）接单，其他空闲母号照常办理，已开始的任务及续跑不受影响。</p>
     <fieldset class="recovery-settings">
      <legend>母号异常自动换号</legend>
@@ -121,7 +121,7 @@ onMounted(load);
     </fieldset>
     <fieldset class="recovery-settings">
      <legend>异常恢复与占用告警</legend>
-     <label class="checkbox-label"><input v-model="settings.recovery.enabled" type="checkbox"/>启用自动恢复与只读核实</label>
+     <label class="checkbox-label"><input v-model="settings.recovery.enabled" type="checkbox"/>启用自动恢复与结果核验</label>
      <div class="form-row">
       <label>自动重试次数（首次失败之后）<input v-model.number="settings.recovery.max_retries" type="number" min="0" max="10" required/></label>
       <label>核实各轮间隔（秒，逗号分隔）<input v-model="verifyIntervals" required placeholder="30, 60, 120, 300"/></label>
@@ -130,7 +130,17 @@ onMounted(load);
      </div>
      <label class="checkbox-label"><input v-model="settings.recovery.cleanup_failed" type="checkbox"/>明确未受理且重试结束后，自动清理本次资源并释放费用</label>
      <p class="muted">普通重试使用上方重试间隔；每轮核实与清理都从上一轮结束后计时。等待期间不占执行并发，同母号仍保持串行。关闭自动恢复不强行中断在途操作。</p>
-     <p class="muted">结果未知时只核实，不重复提交、不提前移出或扣费。超过轮次或告警阈值后，请到申请全监控跟进；缺少明确完成依据或资源无法安全清理时保留占用。</p>
+     <p class="muted">关闭套餐兜底时，结果未知只做只读核实。开启后按下方规则移出、登录并核验；查询失败不视为 Free。超过轮次或告警阈值后，请到申请全监控跟进。</p>
+    </fieldset>
+    <fieldset v-if="settings.recovery.plan_fallback" class="recovery-settings">
+     <legend>停用待核实：移出后套餐兜底</legend>
+     <label class="checkbox-label"><input v-model="settings.recovery.plan_fallback.enabled" type="checkbox"/>自动移出、重新登录并核验个人套餐</label>
+     <div class="form-row">
+      <label>最多重新办理轮次<input v-model.number="settings.recovery.plan_fallback.max_cycles" type="number" min="1" max="5" required/></label>
+      <label>每轮核验尝试上限<input v-model.number="settings.recovery.plan_fallback.max_attempts" type="number" min="1" max="10" required/></label>
+      <label>兜底及再次办理间隔（秒）<input v-model.number="settings.recovery.plan_fallback.retry_seconds" type="number" min="5" max="3600" required/></label>
+     </div>
+     <p class="muted">默认开启，等待 30 秒后启动，最多 2 轮、每轮 3 次。确认移出后重新登录；个人套餐为 Free 时按业务规则完成服务并结算，仍为付费套餐时保留原单重新邀请办理。未知套餐、登录失败和查询失败仅重试核验，不视为成功；Free 不代表退款到账。关闭自动恢复会暂停尚未开始的兜底。</p>
     </fieldset>
     <button class="button primary" :disabled="busy">应用调度配置</button>
    </form>

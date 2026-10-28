@@ -2,7 +2,7 @@
 import {onUnmounted,ref,watch} from 'vue';
 import {api} from '../lib/api';
 type Item={stage:string;attempt:number;status:string;started_at:string|null;finished_at:string|null;duration_seconds:number|null;reason:string};
-type Recovery={pending:boolean;running:boolean;alert:boolean;label:string;reason:string;started_at:string|null;next_at:string|null;retries:number;checks:number;cleanups:number;switches:number};
+type Recovery={pending:boolean;running:boolean;alert:boolean;label:string;reason:string;started_at:string|null;next_at:string|null;retries:number;checks:number;cleanups:number;switches:number;fallbacks:number};
 type Timeline={recovery?:Recovery;items:Item[];active:boolean;generated_at:string};
 const props=defineProps<{id:string;status:string}>();
 const data=ref<Timeline>(),error=ref(''),loading=ref(false);
@@ -31,7 +31,7 @@ onUnmounted(()=>{disposed=true;sequence++;controller?.abort();clearTimeout(timer
    <span v-if="data.recovery.alert">异常占用已超过告警阈值，请跟进</span>
    <p>{{data.recovery.reason}}</p>
    <p>首次异常 {{timestamp(data.recovery.started_at)}}<br/>{{data.recovery.next_at?'下次执行 '+timestamp(data.recovery.next_at):data.recovery.pending?'当前正在核对':'没有待执行的自动任务'}}</p>
-   <small>已重试 {{data.recovery.retries}} 次 · 已核实 {{data.recovery.checks}} 轮 · 已清理核对 {{data.recovery.cleanups}} 轮<span v-if="data.recovery.switches"> · 已安排换号 {{data.recovery.switches}} 次</span></small>
+   <small>已重试 {{data.recovery.retries}} 次 · 已核实 {{data.recovery.checks}} 轮 · 已清理核对 {{data.recovery.cleanups}} 轮 · 已兜底 {{data.recovery.fallbacks||0}} 轮<span v-if="data.recovery.switches"> · 已安排换号 {{data.recovery.switches}} 次</span></small>
   </div>
   <ol v-if="data" class="stage-records">
    <li v-for="(row,index) in data.items" :key="index" :class="tone(row.status)">
