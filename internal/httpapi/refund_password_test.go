@@ -42,9 +42,15 @@ func TestPasswordFailurePublicResultAndSessionRemainUsable(t *testing.T) {
 	for _, method := range []string{"inviting", "invited", "login"} {
 		must(s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: method}))
 	}
-	must(s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "password_failed", Diagnostic: &store.RefundDiagnostic{Code: "password_verification_failed", HTTPStatus: 401, Evidence: &store.RefundEvidence{Stage: "password", Side: "child"}}}))
+	must(s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "password_failed", Diagnostic: &store.RefundDiagnostic{Code: "password_verification_failed", HTTPStatus: 401, Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Reason: "incorrect_password"}}}))
 	must(s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "cleanup_started"}))
 	must(s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "cleanup_completed"}))
+	// Old persisted 401 messages must also be corrected at the read boundary.
+	legacy := "密码验证失败（401），请核对 ChatGPT 登录密码。冻结服务费已释放。"
+	_, err = s.Pool.Exec(ctx, "UPDATE refunds SET message=$2 WHERE id=$1", j.ID, legacy)
+	must(err)
+	_, err = s.Pool.Exec(ctx, "INSERT INTO refund_events(refund_id,message) VALUES($1,$2)", j.ID, legacy)
+	must(err)
 	cookie, err := s.NewSession(ctx, u.ID)
 	must(err)
 	otherCookie, err := s.NewSession(ctx, other.ID)
@@ -81,10 +87,10 @@ func TestPasswordFailurePublicResultAndSessionRemainUsable(t *testing.T) {
 		if res.StatusCode != tc.status {
 			t.Fatal(tc.path, res.StatusCode, body)
 		}
-		if tc.hasCode && (!strings.Contains(body, `"http_status":401`) || !strings.Contains(body, `"error_code":"password_verification_failed"`) || !strings.Contains(body, "密码验证失败")) {
+		if tc.hasCode && (!strings.Contains(body, `"http_status":401`) || !strings.Contains(body, `"error_code":"login_verification_failed"`) || !strings.Contains(body, "登录验证未通过")) {
 			t.Fatal(tc.path, body)
 		}
-		for _, forbidden := range []string{"private-", "terminal_code", "diagnostic", "cleanup", "auth.openai.com", "/invites", "access_token", "JBSWY3DPEHPK3PXP"} {
+		for _, forbidden := range []string{"密码验证失败", "请核对 ChatGPT 登录密码", "private-", "terminal_code", "diagnostic", "cleanup", "auth.openai.com", "/invites", "access_token", "JBSWY3DPEHPK3PXP"} {
 			if strings.Contains(body, forbidden) {
 				t.Fatal("leak", forbidden, tc.path)
 			}

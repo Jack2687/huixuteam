@@ -53,7 +53,8 @@ type RefundDiagnostic struct {
 }
 
 var recoveryReasons = map[string]string{
-	"password_verification_failed": "密码验证失败（401），已停止登录及办理",
+	"password_verification_failed": "登录验证未通过（401），本次申请已停止办理",
+	"login_auth_failed":            "登录验证未通过（401），未确认密码错误",
 	"protocol_trace":               "内部诊断记录",
 	"fallback_unavailable":         "兜底核验未完成，将按配置重试",
 	"fallback_paid":                "个人套餐仍为付费，已安排再次办理",

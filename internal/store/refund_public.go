@@ -6,15 +6,28 @@ import (
 	"strings"
 )
 
-const passwordFailedMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。冻结服务费已释放。"
-const passwordEndingMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。申请正在结束处理中。"
-const passwordAttentionMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。申请结束处理需要跟进，请联系服务专员。"
+const passwordFailedMessage = "登录验证未通过（401）。冻结服务费已释放。"
+const passwordEndingMessage = "登录验证未通过（401）。申请正在结束处理中。"
+const passwordAttentionMessage = "登录验证未通过（401）。申请结束处理需要跟进，请联系服务专员。"
+
+// Normalize old descriptions on read without rewriting history or reopening jobs.
+func normalizeLoginFailureMessage(message string) string {
+	switch message {
+	case "密码验证失败（401），请核对 ChatGPT 登录密码。冻结服务费已释放。":
+		return passwordFailedMessage
+	case "密码验证失败（401），请核对 ChatGPT 登录密码。申请正在结束处理中。":
+		return passwordEndingMessage
+	case "密码验证失败（401），请核对 ChatGPT 登录密码。申请结束处理需要跟进，请联系服务专员。":
+		return passwordAttentionMessage
+	}
+	return message
+}
 
 func sanitizeRefund(r *Refund) {
 	r.Message = publicRefundMessage(r.Status, r.Message)
 	r.ErrorCode, r.HTTPStatus = "", 0
 	if oneOf(r.Message, passwordFailedMessage, passwordEndingMessage, passwordAttentionMessage) {
-		r.ErrorCode, r.HTTPStatus = "password_verification_failed", 401
+		r.ErrorCode, r.HTTPStatus = "login_verification_failed", 401
 	}
 }
 
@@ -31,6 +44,7 @@ func publicProgress(message string) bool {
 	}
 }
 func publicRefundMessage(status, message string) string {
+	message = normalizeLoginFailureMessage(message)
 	if status == "queued" {
 		return "申请正在排队，系统将自动安排处理，无需重复提交；开始处理前可撤回。"
 	}
@@ -52,6 +66,7 @@ func publicRefundMessage(status, message string) string {
 }
 
 func publicNotification(message string) string {
+	message = normalizeLoginFailureMessage(message)
 	if message == "兑换成功，积分已存入可用余额。" || publicProgress(message) {
 		return message
 	}
@@ -62,9 +77,10 @@ func publicNotification(message string) string {
 			return prefix + strconv.Itoa(n) + suffix
 		}
 	}
-	if email, progress, ok := strings.Cut(message, "："); ok && publicProgress(progress) {
-		if addr, err := mail.ParseAddress(email); err == nil && addr.Address == email {
-			return message
+	if email, progress, ok := strings.Cut(message, "："); ok {
+		progress = normalizeLoginFailureMessage(progress)
+		if addr, err := mail.ParseAddress(email); err == nil && addr.Address == email && publicProgress(progress) {
+			return email + "：" + progress
 		}
 	}
 	return "申请状态已更新，请查看申请详情。"

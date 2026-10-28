@@ -264,7 +264,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                 except bridge.DeadAccountError as exc:
                     return {"ok": False, "code": "account_unavailable", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 except Exception as exc:
-                    if isinstance(exc, upstream.LoginFlowError) and exc.code == "password_verification_failed" and exc.status == 401:
+                    if isinstance(exc, upstream.LoginFlowError) and exc.code in {"incorrect_password", "invalid_password"} and exc.status == 401:
                         # Commit the terminal cause before touching membership.
                         # A restart resumes cleanup, never login or submission.
                         detail = diagnostics.failure(exc, "password", flow=flow)
@@ -274,7 +274,8 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                         checkpoint("cleanup_completed")
                         return {"ok": True}
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
-                    result = {"success": False, "retryable": retry, "error_code": "login_failed", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
+                    code = "login_auth_failed" if isinstance(exc, upstream.LoginFlowError) and exc.code == "login_auth_failed" else "login_failed"
+                    result = {"success": False, "retryable": retry, "error_code": code, **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
                     if flow is not None:
                         flow.close()

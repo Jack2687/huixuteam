@@ -31,6 +31,7 @@ class ProxyFlow:
         self.export_body = {"success": True} if export_body is None else export_body
         self.remove_failure = remove_failure
         self.password_failure = password_failure
+        self.password_responses = []
         self.members = False
         self.invited = False
         self.records = []
@@ -152,6 +153,9 @@ class ProxyFlow:
             return 200, {"page": {"type": "login_password"}, "continue_url": "https://auth.openai.com/log-in/password"}, {}
         if path == "/api/accounts/password/verify":
             assert data["password"] == self.job["account"]["password"]
+            if self.password_responses:
+                status, body = self.password_responses.pop(0)
+                return status, body, {}
             if self.password_failure: return 401, {"error": {"code": "invalid_password"}}, {}
             return 200, {"page": {"type": "mfa_challenge", "payload": {"factors": [{"id": "factor", "factor_type": "totp"}]}}}, {}
         if path == "/api/accounts/mfa/issue_challenge":
@@ -243,6 +247,29 @@ class ProxyTransportTests(unittest.TestCase):
         self.assertFalse(any(path.endswith("export_and_deactivate") or '/users/' in path or '/mfa/' in path for _, _, path, _, _ in fixture.records))
         self.assertEqual(sum(path.endswith('/password/verify') for _, _, path, _, _ in fixture.records), 1)
         self.assertEqual([(role, path) for role, method, path, _, _ in fixture.records if method == 'DELETE'], [('mother', '/backend-api/accounts/fixture-team/invites')])
+
+    def test_unclassified_401_relogs_with_fresh_session_then_submits_once(self):
+        value = job()
+        checkpoints, sessions, waits = [], [], []
+        def login_factory(*args):
+            flow = runner.CustomerLogin(*args)
+            sessions.append(flow.web_session)
+            return flow
+        with ProxyFlow(value) as fixture:
+            fixture.password_responses = [(401, {'error': {'code': 'invalid_session'}})]
+            result = runner.execute(value, lambda method, *args: checkpoints.append(method), login_factory=login_factory, sleep=waits.append)
+        self.assertTrue(result['ok'])
+        self.assertEqual(fixture.errors, [])
+        self.assertEqual(waits, [value['settings']['retry_seconds']])
+        self.assertEqual(len(sessions), 2)
+        self.assertIsNot(sessions[0], sessions[1])
+        self.assertEqual(checkpoints.count('login'), 2)
+        self.assertNotIn('password_failed', checkpoints)
+        self.assertNotIn('cleanup_started', checkpoints)
+        self.assertEqual(sum(path.endswith('/password/verify') for _, _, path, _, _ in fixture.records), 2)
+        self.assertEqual(sum(path.endswith('export_and_deactivate') for _, _, path, _, _ in fixture.records), 1)
+        self.assertEqual(sum(method == 'POST' and path.endswith('/invites') for _, method, path, _, _ in fixture.records), 1)
+        self.assertFalse(fixture.invited or fixture.members)
 
 
 if __name__ == "__main__": unittest.main()

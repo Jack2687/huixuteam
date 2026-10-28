@@ -6,12 +6,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"llm-refund/internal/store"
 )
 
 func passwordCheckpoint() store.Checkpoint {
-	return store.Checkpoint{Method: "password_failed", Diagnostic: &store.RefundDiagnostic{Code: "password_verification_failed", HTTPStatus: 401, Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Event: "failure"}}}
+	return store.Checkpoint{Method: "password_failed", Diagnostic: &store.RefundDiagnostic{Code: "password_verification_failed", HTTPStatus: 401, Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Reason: "incorrect_password", Event: "failure"}}}
 }
 
 func TestPassword401CleanupImmediateDurableAndReleasesOnce(t *testing.T) {
@@ -46,7 +47,7 @@ func TestPassword401CleanupImmediateDurableAndReleasesOnce(t *testing.T) {
 				t.Fatal("not immediate cleanup")
 			}
 			r, _ := s.Refund(ctx, u.ID, j.ID)
-			if r.HTTPStatus != 401 || r.ErrorCode != "password_verification_failed" || r.FeeStatus != "frozen" {
+			if r.HTTPStatus != 401 || r.ErrorCode != "login_verification_failed" || r.FeeStatus != "frozen" {
 				t.Fatal(r)
 			}
 			if err = s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "login"}); !errors.Is(err, store.ErrState) {
@@ -82,7 +83,7 @@ func TestPassword401CleanupImmediateDurableAndReleasesOnce(t *testing.T) {
 			checkpoint(t, s, next, "cleanup_started")
 			checkpoint(t, s, next, "cleanup_completed")
 			r, _ = s.Refund(ctx, u.ID, j.ID)
-			if r.Status != "failed" || r.FeeStatus != "released" || r.HTTPStatus != 401 || !strings.Contains(r.Message, "密码验证失败") {
+			if r.Status != "failed" || r.FeeStatus != "released" || r.HTTPStatus != 401 || !strings.Contains(r.Message, "登录验证未通过") {
 				t.Fatal(r)
 			}
 			timeline, err := s.AdminRefundTimeline(ctx, j.ID)
@@ -150,6 +151,9 @@ func TestPassword401CheckpointGuardsAndInterruptedCleanup(t *testing.T) {
 		func(c *store.Checkpoint) { c.Diagnostic.HTTPStatus = 403 },
 		func(c *store.Checkpoint) { c.Diagnostic.Evidence.Side = "mother" },
 		func(c *store.Checkpoint) { c.Diagnostic.Evidence.Stage = "mfa_verify" },
+		func(c *store.Checkpoint) { c.Diagnostic.Evidence.Reason = "" },
+		func(c *store.Checkpoint) { c.Diagnostic.Evidence.Reason = "invalid_session" },
+		func(c *store.Checkpoint) { c.Diagnostic.Evidence.Reason = "unknown_error" },
 	} {
 		c := passwordCheckpoint()
 		mutate(&c)
@@ -193,4 +197,100 @@ func TestPassword401CheckpointGuardsAndInterruptedCleanup(t *testing.T) {
 	}
 	checkpoint(t, s, next, "cleanup_started")
 	checkpoint(t, s, next, "cleanup_completed")
+}
+
+func TestUnclassifiedLogin401RetriesBeforeCleanupAndCanSucceed(t *testing.T) {
+	for _, succeeds := range []bool{true, false} {
+		t.Run(map[bool]string{true: "retry_succeeds", false: "retry_exhausted"}[succeeds], func(t *testing.T) {
+			s, a, u := executionFixture(t, 1)
+			enableRecovery(t, s, a)
+			ctx := context.Background()
+			cfg, _ := s.RefundSettings(ctx)
+			cfg.RetrySeconds = 47
+			cfg.Recovery.MaxRetries = 2
+			if err := s.SaveRefundSettings(ctx, a.ID, cfg); err != nil {
+				t.Fatal(err)
+			}
+			submitRequests(t, s, u, 1)
+			j, err := s.ClaimRefund(ctx)
+			if err != nil || j == nil {
+				t.Fatal(j, err)
+			}
+			checkpoint(t, s, j, "inviting")
+			checkpoint(t, s, j, "invited")
+			originalID, motherID, proxy := j.ID, j.Mother.ID, j.ChildProxy
+			for n := 0; n <= cfg.Recovery.MaxRetries; n++ {
+				checkpoint(t, s, j, "login")
+				if err = s.FinishRefundAttempt(ctx, j, store.RefundDiagnostic{Code: "login_auth_failed", HTTPStatus: 401, Retryable: true,
+					Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Reason: "login_auth_failed"}}); err != nil {
+					t.Fatal(err)
+				}
+				var terminal string
+				if err = s.Pool.QueryRow(ctx, "SELECT terminal_code FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&terminal); err != nil || terminal != "" {
+					t.Fatal("premature terminal cause", terminal, err)
+				}
+				r, err := s.Refund(ctx, u.ID, j.ID)
+				if err != nil || r.FeeStatus != "frozen" || r.Status != "processing" || strings.Contains(r.Message, "密码") {
+					t.Fatal(r, err)
+				}
+				view, err := s.AdminRefundRecovery(ctx, j.ID)
+				if err != nil || !view.Pending || view.Running || view.NextAt == nil {
+					t.Fatal(view, err)
+				}
+				if n < cfg.Recovery.MaxRetries {
+					if delta := time.Until(*view.NextAt); delta < 40*time.Second || delta > 48*time.Second {
+						t.Fatal("retry interval ignored", delta)
+					}
+				}
+				if early, err := s.ClaimRefund(ctx); err != nil || early != nil {
+					t.Fatal("retried before due", early, err)
+				}
+				recoveryDue(t, s, j.ID)
+				j, err = s.ClaimRefund(ctx)
+				if err != nil || j == nil || j.ID != originalID || j.Mother.ID != motherID {
+					t.Fatal("lost original request/resource", j, err)
+				}
+				if n < cfg.Recovery.MaxRetries {
+					if j.RecoveryMode != "retry" || j.TerminalCode != "" || j.ChildProxy != proxy {
+						t.Fatal("not login recovery", j.RecoveryMode)
+					}
+					if succeeds {
+						checkpoint(t, s, j, "login")
+						if err = s.RefundCheckpoint(ctx, j, store.Checkpoint{Method: "merge_v2_ready", TeamID: j.Mother.TeamID, UserID: "child-user"}); err != nil {
+							t.Fatal(err)
+						}
+						checkpoint(t, s, j, "merge_v2_submitting")
+						checkpoint(t, s, j, "merge_v2_accepted")
+						checkpoint(t, s, j, "removing")
+						checkpoint(t, s, j, "completed")
+						break
+					}
+				} else {
+					if j.RecoveryMode != "cleanup" {
+						t.Fatal("retry limit ignored", j.RecoveryMode)
+					}
+					checkpoint(t, s, j, "cleanup_started")
+					checkpoint(t, s, j, "cleanup_completed")
+				}
+			}
+			r, err := s.Refund(ctx, u.ID, originalID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var freezes, releases, settlements int
+			if err = s.Pool.QueryRow(ctx, "SELECT count(*) FILTER(WHERE kind='freeze'),count(*) FILTER(WHERE kind='release'),count(*) FILTER(WHERE kind='settlement') FROM ledger WHERE refund_id=$1", originalID).Scan(&freezes, &releases, &settlements); err != nil {
+				t.Fatal(err)
+			}
+			if freezes != 1 || strings.Contains(r.Message, "密码") {
+				t.Fatal(r, freezes)
+			}
+			if succeeds {
+				if r.Status != "succeeded" || settlements != 1 || releases != 0 {
+					t.Fatal(r, settlements, releases)
+				}
+			} else if r.Status != "failed" || r.FeeStatus != "released" || releases != 1 || settlements != 0 {
+				t.Fatal(r, releases, settlements)
+			}
+		})
+	}
 }

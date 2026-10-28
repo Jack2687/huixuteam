@@ -149,16 +149,16 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 	add("候", "排队中", created, false, "")
 	for _, e := range events {
 		if !e.internal {
-			switch e.message {
+			switch normalizeLoginFailureMessage(e.message) {
 			case passwordEndingMessage:
 				passwordRejected = true
-				finishStage("登", e.at, "未通过", "密码验证失败（401）")
+				finishStage("登", e.at, "未通过", "登录验证未通过（401）")
 			case passwordAttentionMessage:
 				passwordRejected = true
 				interrupt(e.at)
 			case passwordFailedMessage:
 				passwordRejected = true
-				add("结", "已结束", e.at, true, "密码验证失败（401），费用已释放")
+				add("结", "已结束", e.at, true, "登录验证未通过（401），费用已释放")
 			case "开始处理":
 				closeQueue(e.at)
 			case "正在继续处理":

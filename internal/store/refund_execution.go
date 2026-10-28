@@ -246,7 +246,7 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 	next, message := "", ""
 	switch c.Method {
 	case "password_failed":
-		if step != "login" || c.Diagnostic == nil || c.Diagnostic.Code != "password_verification_failed" || c.Diagnostic.HTTPStatus != 401 || c.Diagnostic.Evidence == nil || c.Diagnostic.Evidence.Stage != "password" || c.Diagnostic.Evidence.Side != "child" {
+		if step != "login" || c.Diagnostic == nil || c.Diagnostic.Code != "password_verification_failed" || c.Diagnostic.HTTPStatus != 401 || c.Diagnostic.Evidence == nil || c.Diagnostic.Evidence.Stage != "password" || c.Diagnostic.Evidence.Side != "child" || !oneOf(c.Diagnostic.Evidence.Reason, "incorrect_password", "invalid_password") {
 			return ErrState
 		}
 		var accepted bool
@@ -537,7 +537,7 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 			if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode='cleanup',next_attempt_at=now(),cleanup_count=0 WHERE refund_id=$1", id); err != nil {
 				return err
 			}
-			message = "管理员已安排清理密码验证失败的申请，不再登录或提交。"
+			message = "管理员已安排清理登录验证未通过的申请，不再登录或提交。"
 		} else if action != "verify_only" {
 			if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode='',next_attempt_at=NULL,retry_count=0,cleanup_count=0,verify_count=0,recovery_started_at=NULL WHERE refund_id=$1", id); err != nil {
 				return err

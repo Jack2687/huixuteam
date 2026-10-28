@@ -342,6 +342,7 @@ func (s *Store) Events(ctx context.Context, uid, id string) ([]Event, error) {
 		if err = rows.Scan(&e.ID, &e.Message, &e.CreatedAt); err != nil {
 			return nil, err
 		}
+		e.Message = normalizeLoginFailureMessage(e.Message)
 		if !publicProgress(e.Message) {
 			continue
 		}

@@ -504,15 +504,21 @@ class ProjectProtocolLogin(upstream.ChatGPTProtocolLogin):
                     duration_ms=int((time.monotonic() - started) * 1000),
                     request=request, response=shape, details={"request_id": request_id},
                     level="warning" if response.status >= 400 else "info")
-        # Bind the terminal password failure to this exact response, never to a
-        # stale last_status or a 401 from another login/resource operation.
-        if (url == "https://auth.openai.com/api/accounts/password/verify"
-                and kwargs.get("method", "GET") == "POST" and response.status == 401):
-            raise upstream.LoginFlowError("Password verification failed (401)",
-                                          code="password_verification_failed", status=401, retryable=False)
         code = bridge.dead_code(response.text) if response.status >= 400 else ""
         if code:
             raise bridge.DeadAccountError(code, stage, response.status, upstream.protocol_compact_error(response.json()))
+        # A 401 can be a session/authentication failure with valid credentials.
+        # Only an explicit password error on this exact response is terminal.
+        if (url == "https://auth.openai.com/api/accounts/password/verify"
+                and kwargs.get("method", "GET") == "POST" and response.status == 401):
+            data = response.json()
+            error = data.get("error") if isinstance(data, dict) else None
+            password_code = error.get("code") if isinstance(error, dict) else None
+            if isinstance(password_code, str) and password_code in {"incorrect_password", "invalid_password"}:
+                raise upstream.LoginFlowError("Explicit password rejection (401)",
+                                              code=password_code, status=401, retryable=False)
+            raise upstream.LoginFlowError("Login authentication not completed (401)",
+                                          code="login_auth_failed", status=401, retryable=True)
         if self.is_chatgpt_at() and response.status == 429:
             error = upstream.LoginFlowError(
                 "ChatGPT 临时 AT 请求被限流（HTTP 429）：" + upstream.protocol_compact_error(response.json()),

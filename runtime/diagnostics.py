@@ -14,7 +14,7 @@ STAGES = {
     "api_auth_callback_openai": "callback", "api_auth_session": "session",
     "sentinel": "sentinel", "totp": "mfa_verify", "waiting_code": "email_verification",
 }
-REASONS = set("csrf_or_risk_blocked chatgpt_signin_failed oauth_session_missing chatgpt_rate_limited totp_secret_missing totp_secret_invalid totp_factor_missing totp_dep_missing phone_verification_skipped passkey_or_challenge account_deactivated account_deleted account_banned account_disabled account_suspended incorrect_password invalid_grant invalid_workspace_selected invalid_session invalid_auth_step token_expired rate_limit_exceeded invalid_totp_code invalid_otp".split())
+REASONS = set("csrf_or_risk_blocked chatgpt_signin_failed oauth_session_missing chatgpt_rate_limited totp_secret_missing totp_secret_invalid totp_factor_missing totp_dep_missing phone_verification_skipped passkey_or_challenge account_deactivated account_deleted account_banned account_disabled account_suspended incorrect_password invalid_password login_auth_failed invalid_grant invalid_workspace_selected invalid_session invalid_auth_step token_expired rate_limit_exceeded invalid_totp_code invalid_otp".split())
 EXCEPTIONS = set("RuntimeError ValueError KeyError TypeError AttributeError ImportError ModuleNotFoundError TimeoutError OSError ConnectionError LoginFlowError DeadAccountError NeedsVerification UpstreamFailure VerificationUnavailable RequestsError ProxyError SSLError DNSError ConnectTimeout ReadTimeout ConnectionResetError JSONDecodeError".split())
 FILES = {"refund_runner.py", "refund_recovery.py", "refund_plan_fallback.py", "diagnostics.py", "adapter.py", "upstream.py", "merge_v2.py", "bridge.py", "tls.py", "sentinel_vm.py"}
 _sink = None

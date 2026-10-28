@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import Mock, patch
 
@@ -13,30 +14,63 @@ class PasswordFailureTests(unittest.TestCase):
             'proxy': 'http://child.invalid:8081', 'credential_mode': 'chatgpt_at', 'merge_v2': {'team_id': 'team'},
         })
         self.addCleanup(flow.close)
-        for url, method, status, terminal in [
-            ('https://auth.openai.com/api/accounts/password/verify', 'POST', 401, True),
-            ('https://auth.openai.com/api/accounts/password/verify', 'POST', 403, False),
-            ('https://auth.openai.com/api/accounts/mfa/verify', 'POST', 401, False),
-            ('https://auth.openai.com/api/accounts/password/verify', 'GET', 401, False),
+        password_url = 'https://auth.openai.com/api/accounts/password/verify'
+        for url, method, status, error, expected in [
+            (password_url, 'POST', 401, {}, 'login_auth_failed'),
+            (password_url, 'POST', 401, {'code': 'invalid_session'}, 'login_auth_failed'),
+            (password_url, 'POST', 401, {'code': 'invalid_grant'}, 'login_auth_failed'),
+            (password_url, 'POST', 401, {'code': []}, 'login_auth_failed'),
+            (password_url, 'POST', 401, {'message': 'incorrect password'}, 'login_auth_failed'),
+            (password_url, 'POST', 401, {'code': 'incorrect_password'}, 'incorrect_password'),
+            (password_url, 'POST', 401, {'code': 'invalid_password'}, 'invalid_password'),
+            (password_url, 'POST', 403, {'code': 'invalid_password'}, None),
+            ('https://auth.openai.com/api/accounts/mfa/verify', 'POST', 401, {'code': 'invalid_password'}, None),
+            (password_url, 'GET', 401, {'code': 'invalid_password'}, None),
         ]:
-            response = Mock(status=status, text='{}', headers={}, url=url)
-            response.json.return_value = {}
-            with self.subTest(url=url, method=method, status=status), patch.object(flow, '_web_session_request', return_value=response), patch.object(adapter, 'response_shape', return_value={}), patch.object(adapter.bridge, 'emit'):
+            response = Mock(status=status, text=json.dumps({'error': error}), headers={}, url=url)
+            response.json.return_value = {'error': error}
+            with self.subTest(url=url, method=method, status=status, error=error), patch.object(flow, '_web_session_request', return_value=response), patch.object(adapter, 'response_shape', return_value={}), patch.object(adapter.bridge, 'emit'):
                 flow.first_failed_request = {}
-                if terminal:
+                if expected:
                     with self.assertRaises(upstream.LoginFlowError) as raised:
                         flow.request(url, method=method)
-                    self.assertEqual(raised.exception.code, 'password_verification_failed')
-                    self.assertFalse(raised.exception.retryable)
+                    self.assertEqual(raised.exception.code, expected)
+                    self.assertEqual(raised.exception.retryable, expected == 'login_auth_failed')
                 else:
                     self.assertIs(flow.request(url, method=method), response)
+
+    def test_unclassified_401_uses_bounded_login_recovery_without_terminal_cleanup(self):
+        for enabled in [False, True]:
+            job = test_refund_runner.RunnerTests().job('invited')
+            job['settings']['recovery'] = {'enabled': enabled}
+            flows, events = [], []
+            def login_factory(*args):
+                flow = Mock(last_status=401, last_stage='api_accounts_password_verify')
+                flow.login.side_effect = upstream.LoginFlowError('private', code='login_auth_failed', status=401, retryable=True)
+                flows.append(flow)
+                return flow
+            mother, sleeper = Mock(), Mock()
+            result = runner.execute(job, lambda name, *args: events.append(name), lambda _: mother, login_factory, sleeper)
+            self.assertEqual(result['code'], 'login_auth_failed')
+            self.assertEqual(result['http_status'], 401)
+            self.assertEqual(len(flows), 1 if enabled else job['settings']['max_attempts'])
+            self.assertNotIn('password_failed', events)
+            mother.cleanup_unaccepted.assert_not_called()
+            if enabled:
+                self.assertTrue(result['retryable'])
+                sleeper.assert_not_called()  # Durable scheduler handles the delay.
+            else:
+                sleeper.assert_called_once_with(job['settings']['retry_seconds'])
+            for flow in flows:
+                flow.close.assert_called_once()
+                flow.submit_export.assert_not_called()
 
     def test_password_failure_cleans_immediately_never_relogs_or_submits(self):
         for enabled in [False, True]:
             job = test_refund_runner.RunnerTests().job('invited')
             job['settings']['recovery'] = {'enabled': enabled}
             flow = Mock()
-            flow.login.side_effect = upstream.LoginFlowError('private response', code='password_verification_failed', status=401)
+            flow.login.side_effect = upstream.LoginFlowError('private response', code='incorrect_password', status=401)
             events = []
             mother, sleeper = Mock(), Mock()
             result = runner.execute(job, lambda name, *args: events.append(name), lambda _: mother, lambda *_: flow, sleeper)
@@ -51,7 +85,7 @@ class PasswordFailureTests(unittest.TestCase):
     def test_checkpoint_or_cleanup_failure_never_finishes(self):
         for fail_checkpoint in [True, False]:
             flow = Mock()
-            flow.login.side_effect = upstream.LoginFlowError('private', code='password_verification_failed', status=401)
+            flow.login.side_effect = upstream.LoginFlowError('private', code='incorrect_password', status=401)
             mother = Mock()
             mother.cleanup_unaccepted.side_effect = runner.UpstreamFailure('mother_network', network_code=28)
             events = []
