@@ -39,7 +39,9 @@ class MergeV2ProtocolTests(unittest.TestCase):
         self.assertEqual(args,("POST",merge_v2.EXPORT_URL))
         self.assertNotIn("json",kw);self.assertNotIn("data",kw)
         self.assertNotIn("chatgpt-account-id",{k.lower() for k in kw["headers"]})
-        self.assertEqual(kw["timeout"],60);self.assertEqual(kw["impersonate"],"chrome")
+        self.assertEqual(kw["timeout"],60)
+        self.assertNotIn("impersonate",kw)  # Inherit login TLS; avoid a new proxy tunnel.
+        self.assertEqual(f.web_session.impersonate,upstream.OPENAI_IMPERSONATE)
         self.assertFalse(kw["allow_redirects"]);self.assertFalse(kw["default_headers"])
         self.assertEqual(kw["headers"]["User-Agent"],merge_v2.SAFARI_UA)
         self.assertEqual(kw["headers"]["Origin"],"https://chatgpt.com")

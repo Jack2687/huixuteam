@@ -113,9 +113,12 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         diagnostics.request_event("export", "start")
         try:
             # Deliberately bypass login request retries; exactly one destructive POST.
+            # Keep the login session's pinned TLS profile. Overriding it with the
+            # floating "chrome" alias forces a new tunnel and may rotate the
+            # configured proxy's exit just before this request.
             resp = self.web_session.request("POST", EXPORT_URL, headers=headers,
                                             timeout=60, allow_redirects=False,
-                                            impersonate="chrome", default_headers=False)
+                                            default_headers=False)
         except Exception as exc:
             network_code = getattr(exc, "code", 0)
             network_code = network_code if type(network_code) is int else 0
