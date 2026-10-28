@@ -10,6 +10,8 @@ export interface User {
   permissions: string[];
 }
 export interface Refund {
+  error_code?: "password_verification_failed";
+  http_status?: number;
   id: string;
   email: string;
   status: string;

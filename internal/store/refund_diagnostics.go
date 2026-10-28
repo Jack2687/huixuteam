@@ -46,7 +46,7 @@ func evidenceNumber(value, maximum int) int {
 func (v RefundEvidence) Sanitized() *RefundEvidence {
 	v.TransportState = evidenceEnum(v.TransportState, "tls_before_request")
 	v.ProxyHTTPStatus = evidenceNumber(v.ProxyHTTPStatus, 599)
-	v.Stage = evidenceEnum(v.Stage, "login csrf signin authorize identifier password mfa_challenge mfa_verify workspace callback session sentinel email_verification personal_check members_read invites_read invite_send member_remove mother_operation export runtime checkpoint fallback_remove fallback_login fallback_plan")
+	v.Stage = evidenceEnum(v.Stage, "login csrf signin authorize identifier password mfa_challenge mfa_verify workspace callback session sentinel email_verification personal_check members_read invites_read invite_send invite_revoke member_remove mother_operation export runtime checkpoint fallback_remove fallback_login fallback_plan")
 	v.Side = evidenceEnum(v.Side, "child mother worker")
 	v.Event = evidenceEnum(v.Event, "start response error failure truncated")
 	v.Reason = evidenceEnum(v.Reason, evidenceReasons)

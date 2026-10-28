@@ -314,7 +314,7 @@ func (s *Store) AdminRefunds(ctx context.Context, q, status string, page, size i
 		if err = rows.Scan(&a.ID, &a.Email, &a.Status, &a.Fee, &a.FeeStatus, &a.Message, &a.CreatedAt, &a.UpdatedAt, &a.UserID, &a.UserName, &a.UserEmail); err != nil {
 			return nil, 0, err
 		}
-		a.Message = publicRefundMessage(a.Status, a.Message)
+		sanitizeRefund(&a.Refund)
 		out = append(out, a)
 	}
 	return out, total, rows.Err()

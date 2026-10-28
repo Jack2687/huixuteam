@@ -6,10 +6,24 @@ import (
 	"strings"
 )
 
+const passwordFailedMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。冻结服务费已释放。"
+const passwordEndingMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。申请正在结束处理中。"
+const passwordAttentionMessage = "密码验证失败（401），请核对 ChatGPT 登录密码。申请结束处理需要跟进，请联系服务专员。"
+
+func sanitizeRefund(r *Refund) {
+	r.Message = publicRefundMessage(r.Status, r.Message)
+	r.ErrorCode, r.HTTPStatus = "", 0
+	if oneOf(r.Message, passwordFailedMessage, passwordEndingMessage, passwordAttentionMessage) {
+		r.ErrorCode, r.HTTPStatus = "password_verification_failed", 401
+	}
+}
+
 // Public messages are an allowlist, never a pass-through of worker/upstream logs.
 // This also protects historical rows written before the private event split.
 func publicProgress(message string) bool {
 	switch message {
+	case passwordFailedMessage, passwordEndingMessage, passwordAttentionMessage:
+		return true
 	case "申请已受理", "开始处理", "处理时间延长，正在继续", "退款服务已完成", "正在继续处理", "申请需要跟进，请联系服务专员。", "本次服务未完成，冻结服务费已释放。", "申请已取消，冻结积分已释放。":
 		return true
 	default:

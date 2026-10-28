@@ -192,7 +192,9 @@ function download() {
                 {{
                   row.status === "queued"
                     ? "排队等待自动处理"
-                    : statuses[row.status]?.label
+                    : row.error_code === "password_verification_failed"
+                      ? "密码验证失败（401）"
+                      : statuses[row.status]?.label
                 }}
               </td>
               <td>

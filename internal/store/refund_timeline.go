@@ -77,6 +77,7 @@ func (s *Store) AdminRefundTimeline(ctx context.Context, id string) (*RefundTime
 func projectRefundTimeline(status string, created, now time.Time, accepted, completed *time.Time, events []timelineEvent) *RefundTimeline {
 	out := &RefundTimeline{Items: []RefundTimelineItem{}, Active: status == "queued" || status == "processing" || status == "verifying", GeneratedAt: now}
 	counts := map[string]int{}
+	passwordRejected := false
 	last := func(stage string) int {
 		for i := len(out.Items) - 1; i >= 0; i-- {
 			if out.Items[i].Stage == stage {
@@ -149,6 +150,15 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 	for _, e := range events {
 		if !e.internal {
 			switch e.message {
+			case passwordEndingMessage:
+				passwordRejected = true
+				finishStage("登", e.at, "未通过", "密码验证失败（401）")
+			case passwordAttentionMessage:
+				passwordRejected = true
+				interrupt(e.at)
+			case passwordFailedMessage:
+				passwordRejected = true
+				add("结", "已结束", e.at, true, "密码验证失败（401），费用已释放")
 			case "开始处理":
 				closeQueue(e.at)
 			case "正在继续处理":
@@ -253,7 +263,9 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 	for n, stage := range stages {
 		if counts[stage] == 0 {
 			state := "未开始"
-			if n < maxStage || status == "succeeded" {
+			if passwordRejected && oneOf(stage, "团", "停") {
+				state = "未执行"
+			} else if n < maxStage || status == "succeeded" {
 				state = "未记录"
 			} else if status == "failed" || status == "banned" || status == "cancelled" {
 				state = "未执行"

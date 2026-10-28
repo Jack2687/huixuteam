@@ -32,6 +32,7 @@ class ProxyFlow:
         self.remove_failure = remove_failure
         self.password_failure = password_failure
         self.members = False
+        self.invited = False
         self.records = []
         self.errors = []
         self.servers = []
@@ -120,9 +121,15 @@ class ProxyFlow:
             if method == "GET" and path in {prefix + "/users", prefix + "/invites"}:
                 assert parse_qs(url.query)["query"] == [email]
                 rows = [{"email": email, "id": "child-user", "role": "standard-user"}] if self.members and path.endswith("/users") else []
+                if self.invited and path.endswith("/invites"):
+                    rows = [{"email_address": email, "id": "invite-child", "role": "standard-user"}]
                 return 200, {"items": rows}, {}
             if method == "POST" and path == prefix + "/invites":
                 assert data["email_addresses"] == [email] and data["role"] == "standard-user"
+                self.invited = True
+                return 200, {}, {}
+            if method == "DELETE" and path == prefix + "/invites/invite-child":
+                self.invited = False
                 return 200, {}, {}
             if method == "DELETE" and path == prefix + "/users/child-user":
                 if self.remove_failure: return 503, {"error": "fixture error"}, {}
@@ -154,6 +161,7 @@ class ProxyFlow:
         if path == "/api/accounts/workspace/select":
             assert data == {"workspace_id": team}
             self.members = True
+            self.invited = False
             return 200, {"continue_url": "https://chatgpt.com/api/auth/callback/openai?code=fixture-code"}, {}
         if path == "/api/auth/callback/openai":
             assert "fixture_login=shared" in headers.get("Cookie", "")
@@ -219,13 +227,19 @@ class ProxyTransportTests(unittest.TestCase):
         self.assertTrue(all(role == "mother" for role, *_ in resumed))
         self.assertEqual(sum(path.endswith("export_and_deactivate") for _, _, path, _, _ in fixture.records), 1)
 
-    def test_wrong_password_never_submits_or_removes(self):
+    def test_wrong_password_revokes_invitation_without_submission(self):
         value = job()
+        checkpoints = []
         with ProxyFlow(value, password_failure=True) as fixture:
-            result = runner.execute(value, lambda *args: None, sleep=lambda _: None)
-        self.assertFalse(result["ok"])
+            result = runner.execute(value, lambda method, *args: checkpoints.append(method), sleep=lambda _: None)
+        self.assertTrue(result["ok"])  # Cleanup succeeded; durable result is failed.
         self.assertEqual(fixture.errors, [])
-        self.assertFalse(any(path.endswith("export_and_deactivate") or method == "DELETE" for _, method, path, _, _ in fixture.records))
+        self.assertFalse(fixture.invited)
+        self.assertFalse(fixture.members)
+        self.assertEqual([s for s in checkpoints if s != 'diagnostic'], ['inviting', 'invited', 'login', 'password_failed', 'cleanup_started', 'cleanup_completed'])
+        self.assertFalse(any(path.endswith("export_and_deactivate") or '/users/' in path or '/mfa/' in path for _, _, path, _, _ in fixture.records))
+        self.assertEqual(sum(path.endswith('/password/verify') for _, _, path, _, _ in fixture.records), 1)
+        self.assertEqual([(role, path) for role, method, path, _, _ in fixture.records if method == 'DELETE'], [('mother', '/backend-api/accounts/fixture-team/invites/invite-child')])
 
 
 if __name__ == "__main__": unittest.main()

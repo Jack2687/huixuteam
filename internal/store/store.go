@@ -54,14 +54,16 @@ type User struct {
 	Permissions []string `json:"permissions"`
 }
 type Refund struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Status    string    `json:"status"`
-	Fee       int64     `json:"fee"`
-	FeeStatus string    `json:"fee_status"`
-	Message   string    `json:"message"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ErrorCode  string    `json:"error_code,omitempty"`
+	HTTPStatus int       `json:"http_status,omitempty"`
+	ID         string    `json:"id"`
+	Email      string    `json:"email"`
+	Status     string    `json:"status"`
+	Fee        int64     `json:"fee"`
+	FeeStatus  string    `json:"fee_status"`
+	Message    string    `json:"message"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 type Event struct {
 	ID        int64     `json:"id"`
@@ -318,7 +320,7 @@ const refundColumns = "id,email,status,fee,fee_status,message,created_at,updated
 func scanRefund(row pgx.Row) (Refund, error) {
 	var r Refund
 	err := row.Scan(&r.ID, &r.Email, &r.Status, &r.Fee, &r.FeeStatus, &r.Message, &r.CreatedAt, &r.UpdatedAt)
-	r.Message = publicRefundMessage(r.Status, r.Message)
+	sanitizeRefund(&r)
 	return r, err
 }
 func (s *Store) Refund(ctx context.Context, uid, id string) (Refund, error) {

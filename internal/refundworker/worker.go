@@ -281,7 +281,7 @@ func (w *Worker) Execute(parent context.Context, j *store.RefundJob) {
 	var finishErr error
 	var preflightError *ProtocolError
 	preflight := errors.As(err, &preflightError) && (preflightError.Diagnostic.Code == "mother_preflight_auth" || preflightError.Diagnostic.Code == "mother_preflight_failed")
-	if preflight || (j.Settings.Recovery != nil && j.Settings.Recovery.Enabled) {
+	if preflight || j.TerminalCode == "password_verification_failed" || (j.Settings.Recovery != nil && j.Settings.Recovery.Enabled) {
 		diagnostic := store.RefundDiagnostic{Code: "protocol_failed"}
 		var pe *ProtocolError
 		if errors.As(err, &pe) {

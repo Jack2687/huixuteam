@@ -97,9 +97,9 @@ func (s *Store) AdminRefundMonitor(ctx context.Context, f RefundMonitorFilter) (
  SELECT r.id,r.email,r.status,r.fee,r.fee_status,r.message,r.created_at,r.updated_at,
  u.id AS user_id,u.name AS user_name,u.email AS user_email,p.started_at,
  COALESCE((NOT e.released OR (r.status='queued' AND e.recovery_mode='mother_switch')) AND e.recovery_started_at<=now()-((cfg.recovery->>'alert_seconds')::int * interval '1 second'),false) AS recovery_alert,
- COALESCE((NOT e.released AND e.recovery_mode<>'' AND ((e.next_attempt_at IS NOT NULL AND ((cfg.recovery->>'enabled')::boolean AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR COALESCE((cfg.recovery->'plan_fallback'->>'enabled')::boolean,false)))) OR e.lease_until>now())) OR
+ COALESCE((NOT e.released AND e.recovery_mode<>'' AND ((e.next_attempt_at IS NOT NULL AND (((cfg.recovery->>'enabled')::boolean OR (e.recovery_mode='cleanup' AND e.terminal_code='password_verification_failed')) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR COALESCE((cfg.recovery->'plan_fallback'->>'enabled')::boolean,false)))) OR e.lease_until>now())) OR
  (r.status='queued' AND e.recovery_mode='mother_switch' AND cfg.enabled AND (cfg.mother_failover->>'enabled')::boolean),false) AS recovery_pending,
- CASE WHEN (NOT e.released AND ((cfg.recovery->>'enabled')::boolean AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR COALESCE((cfg.recovery->'plan_fallback'->>'enabled')::boolean,false)))) OR (r.status='queued' AND e.recovery_mode='mother_switch' AND cfg.enabled AND (cfg.mother_failover->>'enabled')::boolean) THEN e.next_attempt_at END AS next_check_at,
+ CASE WHEN (NOT e.released AND (((cfg.recovery->>'enabled')::boolean OR (e.recovery_mode='cleanup' AND e.terminal_code='password_verification_failed')) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR COALESCE((cfg.recovery->'plan_fallback'->>'enabled')::boolean,false)))) OR (r.status='queued' AND e.recovery_mode='mother_switch' AND cfg.enabled AND (cfg.mother_failover->>'enabled')::boolean) THEN e.next_attempt_at END AS next_check_at,
  CASE WHEN r.status IN ('succeeded','failed','banned','cancelled') THEN r.updated_at END AS finished_at
  FROM refunds r JOIN users u ON u.id=r.user_id LEFT JOIN refund_execution e ON e.refund_id=r.id CROSS JOIN refund_settings cfg
  LEFT JOIN LATERAL (SELECT min(created_at) AS started_at FROM refund_events
@@ -144,7 +144,7 @@ SELECT row_to_json(summary), (SELECT count(*) FROM filtered),
 		return out, err
 	}
 	for i := range out.Items {
-		out.Items[i].Message = publicRefundMessage(out.Items[i].Status, out.Items[i].Message)
+		sanitizeRefund(&out.Items[i].Refund)
 	}
 	return out, nil
 }

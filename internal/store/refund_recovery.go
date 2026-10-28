@@ -53,39 +53,40 @@ type RefundDiagnostic struct {
 }
 
 var recoveryReasons = map[string]string{
-	"protocol_trace":           "内部诊断记录",
-	"fallback_unavailable":     "兜底核验未完成，将按配置重试",
-	"fallback_paid":            "个人套餐仍为付费，已安排再次办理",
-	"fallback_free":            "个人套餐已核验为 Free，按配置完成服务",
-	"mother_preflight_auth":    "服务资源授权已失效，尚未开始办理",
-	"mother_preflight_failed":  "服务资源连接未通过，尚未开始办理",
-	"export_uncertain":         "处理结果未明确，正在核实",
-	"export_rejected":          "本次请求未受理",
-	"export_not_sent":          "连接未建立，请求尚未发送",
-	"export_accepted":          "已收到明确受理确认",
-	"login_failed":             "账号登录未完成",
-	"team_session_expired":     "会话需要更新",
-	"extra_verification":       "账号需要补充验证",
-	"account_unavailable":      "账号当前不可用",
-	"mother_network":           "服务连接未完成",
-	"mother_http":              "服务请求未完成",
-	"mother_shape":             "服务查询结果无法确认",
-	"mother_pagination":        "服务查询结果不完整",
-	"mother_identity":          "服务身份校验未通过",
-	"member_identity":          "账号身份校验未通过",
-	"proxy_missing":            "网络配置不可用",
-	"protocol_failed":          "办理中断，已保留进度",
-	"worker_interrupted":       "办理中断，已安排恢复检查",
-	"verification_active":      "原个人空间仍可见，受理结果仍待核实",
-	"verification_missing":     "个人空间已不可见，仍需确认处理结果",
-	"verification_deactivated": "原个人空间显示已停用，仍需确认受理依据",
-	"verification_changed":     "账户空间信息发生变化，需要人工核实",
-	"verification_unavailable": "本轮未取得完整核实结果",
-	"verification_no_baseline": "缺少提交前记录，需要人工核实",
-	"cleanup_pending":          "正在核对资源清理结果",
-	"cleanup_invite_pending":   "待加入记录尚未清理，需要人工跟进",
-	"cleanup_failed":           "资源清理未完成",
-	"cleanup_completed":        "本次资源已确认清理",
+	"password_verification_failed": "密码验证失败（401），已停止登录及办理",
+	"protocol_trace":               "内部诊断记录",
+	"fallback_unavailable":         "兜底核验未完成，将按配置重试",
+	"fallback_paid":                "个人套餐仍为付费，已安排再次办理",
+	"fallback_free":                "个人套餐已核验为 Free，按配置完成服务",
+	"mother_preflight_auth":        "服务资源授权已失效，尚未开始办理",
+	"mother_preflight_failed":      "服务资源连接未通过，尚未开始办理",
+	"export_uncertain":             "处理结果未明确，正在核实",
+	"export_rejected":              "本次请求未受理",
+	"export_not_sent":              "连接未建立，请求尚未发送",
+	"export_accepted":              "已收到明确受理确认",
+	"login_failed":                 "账号登录未完成",
+	"team_session_expired":         "会话需要更新",
+	"extra_verification":           "账号需要补充验证",
+	"account_unavailable":          "账号当前不可用",
+	"mother_network":               "服务连接未完成",
+	"mother_http":                  "服务请求未完成",
+	"mother_shape":                 "服务查询结果无法确认",
+	"mother_pagination":            "服务查询结果不完整",
+	"mother_identity":              "服务身份校验未通过",
+	"member_identity":              "账号身份校验未通过",
+	"proxy_missing":                "网络配置不可用",
+	"protocol_failed":              "办理中断，已保留进度",
+	"worker_interrupted":           "办理中断，已安排恢复检查",
+	"verification_active":          "原个人空间仍可见，受理结果仍待核实",
+	"verification_missing":         "个人空间已不可见，仍需确认处理结果",
+	"verification_deactivated":     "原个人空间显示已停用，仍需确认受理依据",
+	"verification_changed":         "账户空间信息发生变化，需要人工核实",
+	"verification_unavailable":     "本轮未取得完整核实结果",
+	"verification_no_baseline":     "缺少提交前记录，需要人工核实",
+	"cleanup_pending":              "正在核对资源清理结果",
+	"cleanup_invite_pending":       "待加入记录尚未清理，需要人工跟进",
+	"cleanup_failed":               "资源清理未完成",
+	"cleanup_completed":            "本次资源已确认清理",
 }
 
 func (d RefundDiagnostic) Sanitized() RefundDiagnostic {
@@ -137,13 +138,24 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 		return err
 	}
 	var retries, checks, cleanups, fallbackCycles, fallbackAttempts int
-	var mode, fallbackPhase string
-	if err := tx.QueryRow(ctx, "SELECT retry_count,verify_count,cleanup_count,recovery_mode,fallback_cycles,fallback_attempts,fallback_phase FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&retries, &checks, &cleanups, &mode, &fallbackCycles, &fallbackAttempts, &fallbackPhase); err != nil {
+	var mode, fallbackPhase, terminalCode string
+	if err := tx.QueryRow(ctx, "SELECT retry_count,verify_count,cleanup_count,recovery_mode,fallback_cycles,fallback_attempts,fallback_phase,terminal_code FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&retries, &checks, &cleanups, &mode, &fallbackCycles, &fallbackAttempts, &fallbackPhase, &terminalCode); err != nil {
 		return err
 	}
 	cfg := j.Settings.Recovery
 	nextMode, status, message, delay := "", "attention", "申请需要跟进，请联系服务专员。", 0
-	if cfg != nil && cfg.Enabled {
+	passwordFailed := terminalCode == "password_verification_failed" && oneOf(step, "invited", "login", "ready")
+	if passwordFailed {
+		// Password rejection always ends the attempt. Recovery switches may
+		// disable business retries, but must not leave this cleanup abandoned.
+		intervals := []int{15, 30, 60}
+		if cfg != nil && len(cfg.CleanupIntervals) > 0 {
+			intervals = cfg.CleanupIntervals
+		}
+		if cleanups < len(intervals) {
+			nextMode, delay = "cleanup", intervals[cleanups]
+		}
+	} else if cfg != nil && cfg.Enabled {
 		switch {
 		case step == "submitting" && cfg.PlanFallback != nil && cfg.PlanFallback.Enabled:
 			f := cfg.PlanFallback
@@ -179,6 +191,12 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 		message = "处理时间延长，正在继续"
 		if nextMode == "verify" {
 			status = "verifying"
+		}
+	}
+	if passwordFailed {
+		message = passwordAttentionMessage
+		if nextMode != "" {
+			message = passwordEndingMessage
 		}
 	}
 	if err := transitionTx(ctx, tx, j.UserID, j.ID, status, message); err != nil {
@@ -271,11 +289,11 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 	var raw []byte
 	var released, enabled, switchEnabled, fallbackEnabled bool
 	var fallbackPhase string
-	var status string
+	var status, terminalCode string
 	err := q.QueryRow(ctx, `SELECT e.recovery_mode,e.recovery_started_at,e.next_attempt_at,e.retry_count,e.verify_count,e.cleanup_count,e.last_diagnostic,e.released,
  COALESCE(e.lease_until>now(),false),(NOT e.released OR e.recovery_mode='mother_switch') AND COALESCE(e.recovery_started_at<=now()-((s.recovery->>'alert_seconds')::int * interval '1 second'),false),(s.recovery->>'enabled')::boolean,
-	 e.mother_switch_count,s.enabled AND (s.mother_failover->>'enabled')::boolean,r.status,e.fallback_cycles,COALESCE((s.recovery->'plan_fallback'->>'enabled')::boolean,false),e.fallback_phase
- FROM refund_execution e JOIN refunds r ON r.id=e.refund_id CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled, &v.Switches, &switchEnabled, &status, &v.Fallbacks, &fallbackEnabled, &fallbackPhase)
+	 e.mother_switch_count,s.enabled AND (s.mother_failover->>'enabled')::boolean,r.status,e.fallback_cycles,COALESCE((s.recovery->'plan_fallback'->>'enabled')::boolean,false),e.fallback_phase,e.terminal_code
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id CROSS JOIN refund_settings s WHERE e.refund_id=$1`, id).Scan(&mode, &v.StartedAt, &v.NextAt, &v.Retries, &v.Checks, &v.Cleanups, &raw, &released, &v.Running, &v.Alert, &enabled, &v.Switches, &switchEnabled, &status, &v.Fallbacks, &fallbackEnabled, &fallbackPhase, &terminalCode)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -284,7 +302,7 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 	}
 	v.Pending = !released && (v.NextAt != nil || v.Running)
 	v.Label = map[string]string{"retry": "等待续办", "verify": "自动核实", "cleanup": "清理核对", "fallback": "移出后套餐核验", "": "等待人工核实"}[mode]
-	if !released && (!enabled || ((mode == "fallback" || fallbackPhase == "reinvite") && !fallbackEnabled)) && mode != "" && !v.Running {
+	if !released && terminalCode == "" && (!enabled || ((mode == "fallback" || fallbackPhase == "reinvite") && !fallbackEnabled)) && mode != "" && !v.Running {
 		v.Pending = false
 		v.NextAt = nil
 		v.Label = "自动恢复已暂停"
@@ -306,6 +324,9 @@ func readRefundRecovery(ctx context.Context, q recoveryQuerier, id string) (*Ref
 	_ = json.Unmarshal(raw, &d)
 	if d.Code != "" {
 		v.Reason = recoveryReasons[d.Sanitized().Code]
+	}
+	if terminalCode == "password_verification_failed" {
+		v.Reason = recoveryReasons[terminalCode]
 	}
 	return &v, nil
 }

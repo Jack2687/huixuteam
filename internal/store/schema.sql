@@ -143,6 +143,7 @@ ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS verify_count INTEGER NOT N
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS cleanup_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS personal_baseline JSONB;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS last_diagnostic JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS terminal_code TEXT NOT NULL DEFAULT '' CHECK (terminal_code IN ('','password_verification_failed'));
 CREATE INDEX IF NOT EXISTS refund_execution_recovery_due ON refund_execution(next_attempt_at) WHERE NOT released;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_phase TEXT NOT NULL DEFAULT '';
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_cycles INTEGER NOT NULL DEFAULT 0;

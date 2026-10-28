@@ -67,7 +67,7 @@ class MotherClient:
         }
 
     def call(self, method, suffix, body=None, timeout=60):
-        operation = ("member_remove" if method == "DELETE" else "members_read") if suffix.startswith("/users") else ("invite_send" if method == "POST" else "invites_read")
+        operation = ("member_remove" if method == "DELETE" else "members_read") if suffix.startswith("/users") else ("invite_send" if method == "POST" else ("invite_revoke" if method == "DELETE" else "invites_read"))
         started = time.monotonic()
         diagnostics.request_event(operation, "start", side="mother")
         args = {"headers": self.headers, "timeout": timeout, "allow_redirects": False}
@@ -160,10 +160,27 @@ class MotherClient:
         if row is not None:
             identity = child_id or str(row.get("user_id") or row.get("id") or "")
             self.remove(identity)
-        # No verified cancellation contract is available for pending invites.
-        # Preserve the reservation instead of guessing an endpoint or hiding it.
-        if self.find("invites") is not None:
-            raise UpstreamFailure("cleanup_invite_pending")
+        invitation = self.find("invites")
+        if invitation is not None:
+            email = str(invitation.get("email") or invitation.get("email_address") or "").casefold()
+            identity = invitation.get("id")
+            role = str(invitation.get("role") or "").lower()
+            if email != self.email or not isinstance(identity, str) or not identity or role not in {"standard-user", "member", "user"}:
+                raise UpstreamFailure("member_identity")
+            failure = None
+            try:
+                self.call("DELETE", "/invites/" + quote(identity, safe=""))
+            except UpstreamFailure as exc:
+                failure = exc
+            # A DELETE response (including 2xx/404) is not proof of absence.
+            # Handle an acceptance race only for this same customer's member.
+            row = self.find("users")
+            if row is not None:
+                self.remove(child_id or str(row.get("user_id") or row.get("id") or ""))
+            if self.find("invites") is not None:
+                if failure is not None:
+                    raise failure
+                raise UpstreamFailure("cleanup_invite_pending")
         self.confirm_removed()
 
 
@@ -247,6 +264,15 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                 except bridge.DeadAccountError as exc:
                     return {"ok": False, "code": "account_unavailable", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 except Exception as exc:
+                    if isinstance(exc, upstream.LoginFlowError) and exc.code == "password_verification_failed" and exc.status == 401:
+                        # Commit the terminal cause before touching membership.
+                        # A restart resumes cleanup, never login or submission.
+                        detail = diagnostics.failure(exc, "password", flow=flow)
+                        checkpoint("password_failed", {"diagnostic": {"code": "password_verification_failed", **detail}})
+                        checkpoint("cleanup_started")
+                        mother.cleanup_unaccepted(child_id)
+                        checkpoint("cleanup_completed")
+                        return {"ok": True}
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
                     result = {"success": False, "retryable": retry, "error_code": "login_failed", **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
