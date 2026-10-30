@@ -177,6 +177,10 @@ func projectRefundTimeline(status string, created, now time.Time, accepted, comp
 			continue
 		}
 		switch e.message {
+		case "提交响应需核验实际结果，不重复提交。":
+			finishStage("停", e.at, "待核实", "正在核验实际结果，不重复提交")
+		case "兜底：个人套餐仍为付费，继续核验，不重新提交。":
+			finishStage("验", e.at, "待核实", "个人套餐仍为付费，按配置间隔继续核验")
 		case "已安排移出后套餐兜底核验。":
 			interrupt(e.at)
 		case "兜底：正在移出本次账号。":

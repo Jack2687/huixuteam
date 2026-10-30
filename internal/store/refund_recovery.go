@@ -9,16 +9,27 @@ import (
 )
 
 type RefundRecoverySettings struct {
-	PlanFallback     *PlanFallbackSettings `json:"plan_fallback,omitempty"`
-	Enabled          bool                  `json:"enabled"`
-	MaxRetries       int                   `json:"max_retries"`
-	VerifyIntervals  []int                 `json:"verify_intervals"`
-	CleanupIntervals []int                 `json:"cleanup_intervals"`
-	AlertSeconds     int                   `json:"alert_seconds"`
-	CleanupFailed    bool                  `json:"cleanup_failed"`
+	VerificationHTTPStatuses []int                 `json:"verification_http_statuses"`
+	PlanFallback             *PlanFallbackSettings `json:"plan_fallback,omitempty"`
+	Enabled                  bool                  `json:"enabled"`
+	MaxRetries               int                   `json:"max_retries"`
+	VerifyIntervals          []int                 `json:"verify_intervals"`
+	CleanupIntervals         []int                 `json:"cleanup_intervals"`
+	AlertSeconds             int                   `json:"alert_seconds"`
+	CleanupFailed            bool                  `json:"cleanup_failed"`
 }
 
 func (v RefundRecoverySettings) Validate() error {
+	if len(v.VerificationHTTPStatuses) > 30 {
+		return invalid("结果核验状态码最多设置 30 个")
+	}
+	seen := map[int]bool{}
+	for _, status := range v.VerificationHTTPStatuses {
+		if status < 400 || status > 599 || seen[status] {
+			return invalid("结果核验状态码须为不重复的 400～599 整数，用英文逗号分隔")
+		}
+		seen[status] = true
+	}
 	if v.PlanFallback != nil {
 		if err := v.PlanFallback.Validate(); err != nil {
 			return err
@@ -40,6 +51,18 @@ func (v RefundRecoverySettings) Validate() error {
 	return nil
 }
 
+func (v *RefundRecoverySettings) RequiresResultVerification(status int) bool {
+	if v == nil || v.VerificationHTTPStatuses == nil {
+		return status == 404
+	}
+	for _, configured := range v.VerificationHTTPStatuses {
+		if configured == status && status >= 400 && status <= 599 {
+			return true
+		}
+	}
+	return false
+}
+
 // Internal, typed evidence only. Never persist response bodies, tokens, URLs,
 // headers, exception strings or arbitrary upstream error codes.
 type RefundDiagnostic struct {
@@ -53,6 +76,8 @@ type RefundDiagnostic struct {
 }
 
 var recoveryReasons = map[string]string{
+	"export_verification_required": "提交响应需核验实际结果，不重复提交",
+	"fallback_paid_unconfirmed":    "个人套餐仍为付费，继续核验，不重新提交",
 	"password_verification_failed": "登录验证未通过（401），本次申请已停止办理",
 	"login_auth_failed":            "登录验证未通过（401），未确认密码错误",
 	"protocol_trace":               "内部诊断记录",

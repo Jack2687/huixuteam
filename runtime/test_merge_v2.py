@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 from manager_oauth import adapter, merge_v2, upstream
+import diagnostics
 
 
 def session(team="target-team", email="child@example.com"):
@@ -66,6 +67,26 @@ class MergeV2ProtocolTests(unittest.TestCase):
             result=f.submit_export(session())
         self.assertFalse(result["retryable"]);request.assert_called_once()
         self.assertEqual([c.args[0] for c in rpc.call_args_list],["merge_v2_ready","merge_v2_submitting"])
+
+    def test_configured_responses_preserve_submission_and_record_safe_evidence(self):
+        for codes, status, verify in [(None,404,True),([409,429],409,True),([409,429],429,True),([],404,False)]:
+            f=self.flow();events=[];calls=[]
+            if codes is not None:f.payload['merge_v2']['verification_http_statuses']=codes
+            response=self.response(status,{'error':{'code':'invalid_workspace_selected','message':'private-secret'}})
+            response.text='{"error":{"message":"private-secret"}}'
+            response.headers={'retry-after':'30'}
+            with diagnostics.capture(lambda *args:events.append(args)),patch.object(f.web_session,'request',return_value=response) as request,patch.object(merge_v2.bridge,'call',side_effect=lambda method,**kw:calls.append(method)):
+                result=f.submit_export(session())
+            request.assert_called_once()
+            self.assertFalse(result['success'])
+            self.assertEqual('merge_v2_verify' in calls,verify)
+            self.assertEqual('merge_v2_rejected' in calls,not verify)
+            if verify:self.assertFalse(result['retryable'])
+            evidence=[v[1]['diagnostic'] for v in events if v[1]['diagnostic']['evidence']['event']=='response']
+            self.assertEqual(len(evidence),1)
+            self.assertEqual(evidence[0]['http_status'],status)
+            self.assertEqual(evidence[0]['evidence']['body_kind'],'json')
+            self.assertNotIn('private-secret',json.dumps(events))
 
     def test_wrong_team_or_identity_never_submits(self):
         for value in [session("personal"),session(email="someone@example.com"),{**session(),"account":{"id":"other"}}]:

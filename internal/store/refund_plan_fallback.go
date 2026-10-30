@@ -28,7 +28,8 @@ func planFallbackCheckpoint(ctx context.Context, tx pgx.Tx, j *RefundJob, c Chec
 	}
 	var phase, child string
 	var cycles int
-	if err := tx.QueryRow(ctx, "SELECT fallback_phase,fallback_cycles,child_user_id FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&phase, &cycles, &child); err != nil {
+	var verificationOnly bool
+	if err := tx.QueryRow(ctx, "SELECT fallback_phase,fallback_cycles,child_user_id,verification_only FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&phase, &cycles, &child, &verificationOnly); err != nil {
 		return err
 	}
 	if child == "" {
@@ -49,6 +50,11 @@ func planFallbackCheckpoint(ctx context.Context, tx pgx.Tx, j *RefundJob, c Chec
 			return ErrState
 		}
 		phase, event = "checking", "兜底：已确认移出本次账号。"
+		if verificationOnly {
+			if _, err := tx.Exec(ctx, "UPDATE refund_execution SET mother_released_at=COALESCE(mother_released_at,now()) WHERE refund_id=$1", j.ID); err != nil {
+				return err
+			}
+		}
 	case "fallback_login":
 		if phase != "checking" {
 			return ErrState
@@ -73,7 +79,7 @@ func planFallbackCheckpoint(ctx context.Context, tx pgx.Tx, j *RefundJob, c Chec
 		_, err := tx.Exec(ctx, `UPDATE refund_execution SET step='completed',completion_basis='plan_free',fallback_phase='free',completed_at=now(),released=true,lease_token='',lease_until=NULL,next_attempt_at=NULL,recovery_mode='',updated_at=now() WHERE refund_id=$1`, j.ID)
 		return err
 	case "fallback_paid":
-		if phase != "checking" || c.UserID != child {
+		if phase != "checking" || c.UserID != child || verificationOnly {
 			return ErrState
 		}
 		phase, event = "reinvite", "兜底：个人套餐仍为付费，等待重新邀请办理。"
@@ -82,6 +88,11 @@ func planFallbackCheckpoint(ctx context.Context, tx pgx.Tx, j *RefundJob, c Chec
 		if _, err := tx.Exec(ctx, "UPDATE refund_execution SET step='inviting',personal_baseline=NULL,retry_count=0,verify_count=0,cleanup_count=0 WHERE refund_id=$1", j.ID); err != nil {
 			return err
 		}
+	case "fallback_paid_unconfirmed":
+		if phase != "checking" || c.UserID != child || !verificationOnly {
+			return ErrState
+		}
+		event = "兜底：个人套餐仍为付费，继续核验，不重新提交。"
 	default:
 		return ErrInvalid
 	}

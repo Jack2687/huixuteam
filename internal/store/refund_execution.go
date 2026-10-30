@@ -10,6 +10,7 @@ import (
 )
 
 type RefundJob struct {
+	VerificationOnly  bool                    `json:"verification_only"`
 	TerminalCode      string                  `json:"terminal_code,omitempty"`
 	FallbackPhase     string                  `json:"fallback_phase"`
 	DiagnosticContext RefundDiagnosticContext `json:"-"`
@@ -56,13 +57,13 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 	job := &RefundJob{Settings: cfg}
 	// Recover an interrupted reservation first. Unknown submissions are never replayed.
 	var oldToken, childProxyID, previousStatus string
-	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,''),e.recovery_mode,e.personal_baseline,r.status,e.fallback_phase,e.terminal_code
+	err = tx.QueryRow(ctx, `SELECT e.refund_id,r.user_id,e.mother_id,e.step,e.child_user_id,e.lease_token,COALESCE(e.child_proxy_id,''),e.recovery_mode,e.personal_baseline,r.status,e.fallback_phase,e.terminal_code,e.verification_only
  FROM refund_execution e JOIN refunds r ON r.id=e.refund_id JOIN refund_mothers m ON m.id=e.mother_id JOIN refund_proxies p ON p.id=m.proxy_id
  WHERE NOT e.released AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
  AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2 OR (e.recovery_mode='cleanup' AND e.terminal_code='password_verification_failed')) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR $3)
  AND (e.lease_until IS NULL OR e.lease_until<now()) AND m.enabled AND p.enabled
  AND (e.step IN ('accepted','removing') OR e.recovery_mode='cleanup' OR EXISTS(SELECT 1 FROM refund_proxies cp WHERE cp.id=COALESCE(e.child_proxy_id,NULLIF($1,'')) AND cp.enabled))
- ORDER BY COALESCE(e.next_attempt_at,e.updated_at),e.refund_id LIMIT 1`, cfg.ChildProxyID, recoveryEnabled, fallbackEnabled).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID, &job.RecoveryMode, &job.PersonalBaseline, &previousStatus, &job.FallbackPhase, &job.TerminalCode)
+ ORDER BY COALESCE(e.next_attempt_at,e.updated_at),e.refund_id LIMIT 1`, cfg.ChildProxyID, recoveryEnabled, fallbackEnabled).Scan(&job.ID, &job.UserID, &job.Mother.ID, &job.Step, &job.ChildUserID, &oldToken, &childProxyID, &job.RecoveryMode, &job.PersonalBaseline, &previousStatus, &job.FallbackPhase, &job.TerminalCode, &job.VerificationOnly)
 	existing := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -72,10 +73,10 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
 			return nil, err
 		}
 		var live, released, eligible bool
-		if err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,e.recovery_mode,e.personal_baseline,COALESCE(e.lease_until>now(),false),e.released,r.status,e.fallback_phase,e.terminal_code,
+		if err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,e.recovery_mode,e.personal_baseline,COALESCE(e.lease_until>now(),false),e.released,r.status,e.fallback_phase,e.terminal_code,e.verification_only,
  (e.next_attempt_at IS NULL OR e.next_attempt_at<=now()) AND (e.recovery_mode='' OR $2 OR (e.recovery_mode='cleanup' AND e.terminal_code='password_verification_failed')) AND ((e.recovery_mode<>'fallback' AND e.fallback_phase<>'reinvite') OR $3)
  AND (r.status IN ('processing','verifying') OR (r.status='attention' AND $2 AND e.recovery_started_at IS NULL AND e.step IN ('submitting','accepted','removing')))
- FROM refund_execution e JOIN refunds r ON r.id=e.refund_id WHERE e.refund_id=$1 FOR UPDATE OF r,e`, job.ID, recoveryEnabled, fallbackEnabled).Scan(&job.Step, &oldToken, &job.RecoveryMode, &job.PersonalBaseline, &live, &released, &previousStatus, &job.FallbackPhase, &job.TerminalCode, &eligible); err != nil {
+ FROM refund_execution e JOIN refunds r ON r.id=e.refund_id WHERE e.refund_id=$1 FOR UPDATE OF r,e`, job.ID, recoveryEnabled, fallbackEnabled).Scan(&job.Step, &oldToken, &job.RecoveryMode, &job.PersonalBaseline, &live, &released, &previousStatus, &job.FallbackPhase, &job.TerminalCode, &job.VerificationOnly, &eligible); err != nil {
 			return nil, err
 		}
 		// A finishing worker may have scheduled a later attempt while this claim
@@ -122,8 +123,8 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
   WHERE m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now())
   AND (m.auth_failed_fingerprint IS NULL OR m.auth_failed_fingerprint<>md5(m.secret))
   AND NOT ((m.id||':'||md5(m.secret)||':'||md5(p.secret))=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
-  AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released)
-  AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND done.completed_at>now()-($1 * interval '1 second'))
+  AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released AND busy.mother_released_at IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND COALESCE(done.mother_released_at,done.completed_at)>now()-($1 * interval '1 second'))
   ORDER BY m.updated_at,m.id LIMIT 1
  ) m ON true
  WHERE r.status='queued' AND NOT u.disabled
@@ -221,8 +222,8 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		return err
 	}
 	var step, token, status, terminalCode string
-	var live, released bool
-	err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,COALESCE(e.lease_until>now(),false),e.released,r.status,e.terminal_code FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, j.ID).Scan(&step, &token, &live, &released, &status, &terminalCode)
+	var live, released, verificationOnly bool
+	err = tx.QueryRow(ctx, `SELECT e.step,e.lease_token,COALESCE(e.lease_until>now(),false),e.released,r.status,e.terminal_code,e.verification_only FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, j.ID).Scan(&step, &token, &live, &released, &status, &terminalCode, &verificationOnly)
 	if err != nil {
 		return err
 	}
@@ -230,6 +231,9 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		return ErrState
 	}
 	if terminalCode != "" && !oneOf(c.Method, "password_failed", "cleanup_started", "cleanup_completed") {
+		return ErrState
+	}
+	if verificationOnly && oneOf(c.Method, "merge_v2_rejected", "merge_v2_submitting", "inviting", "invited", "login", "merge_v2_ready") {
 		return ErrState
 	}
 	if c.Diagnostic != nil {
@@ -245,6 +249,14 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 	}
 	next, message := "", ""
 	switch c.Method {
+	case "merge_v2_verify":
+		if step != "submitting" || c.Diagnostic == nil || c.Diagnostic.Code != "export_verification_required" || !j.Settings.Recovery.RequiresResultVerification(c.Diagnostic.HTTPStatus) {
+			return ErrState
+		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET verification_only=true WHERE refund_id=$1", j.ID); err != nil {
+			return err
+		}
+		next, message = step, "提交响应需核验实际结果，不重复提交。"
 	case "password_failed":
 		if step != "login" || c.Diagnostic == nil || c.Diagnostic.Code != "password_verification_failed" || c.Diagnostic.HTTPStatus != 401 || c.Diagnostic.Evidence == nil || c.Diagnostic.Evidence.Stage != "password" || c.Diagnostic.Evidence.Side != "child" || !oneOf(c.Diagnostic.Evidence.Reason, "incorrect_password", "invalid_password") {
 			return ErrState
@@ -468,8 +480,9 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 		return err
 	}
 	var step, status, child, recoveryMode, terminalCode string
-	var live, accepted bool
-	err = tx.QueryRow(ctx, `SELECT e.step,r.status,COALESCE(e.lease_until>now(),false),e.accepted_at IS NOT NULL,e.child_user_id,e.recovery_mode,e.terminal_code FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, id).Scan(&step, &status, &live, &accepted, &child, &recoveryMode, &terminalCode)
+	var live, accepted, motherReleased, verificationOnly bool
+	var fallbackPhase string
+	err = tx.QueryRow(ctx, `SELECT e.step,r.status,COALESCE(e.lease_until>now(),false),e.accepted_at IS NOT NULL,e.child_user_id,e.recovery_mode,e.terminal_code,e.mother_released_at IS NOT NULL,e.fallback_phase,e.verification_only FROM refunds r JOIN refund_execution e ON e.refund_id=r.id WHERE r.id=$1 FOR UPDATE OF r,e`, id).Scan(&step, &status, &live, &accepted, &child, &recoveryMode, &terminalCode, &motherReleased, &fallbackPhase, &verificationOnly)
 	if err != nil {
 		return ErrNotFound
 	}
@@ -496,7 +509,18 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 		if step != "submitting" {
 			return ErrState
 		}
-		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode='verify',verify_count=0,next_attempt_at=now() WHERE refund_id=$1", id); err != nil {
+		mode := "verify"
+		if fallbackPhase != "" {
+			var fallbackEnabled bool
+			if err = tx.QueryRow(ctx, "SELECT COALESCE((recovery->'plan_fallback'->>'enabled')::boolean,false) FROM refund_settings WHERE id").Scan(&fallbackEnabled); err != nil {
+				return err
+			}
+			if !fallbackEnabled {
+				return invalid("账号已进入套餐核验，请先开启套餐兜底")
+			}
+			mode = "fallback"
+		}
+		if _, err = tx.Exec(ctx, "UPDATE refund_execution SET recovery_mode=$2,verify_count=0,fallback_attempts=0,next_attempt_at=now() WHERE refund_id=$1", id, mode); err != nil {
 			return err
 		}
 		message = "管理员已安排只读核实，不重复提交。"
@@ -510,6 +534,9 @@ func (s *Store) ResumeRefund(ctx context.Context, actor, id, action, note string
 		}
 		message = "管理员已核实停用受理，将继续移出团队。"
 	case "confirm_rejected":
+		if motherReleased || verificationOnly {
+			return invalid("本次申请只允许核验结果，不能直接重新提交")
+		}
 		if step != "submitting" || accepted {
 			return ErrState
 		}

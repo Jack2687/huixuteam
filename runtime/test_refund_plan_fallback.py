@@ -133,6 +133,16 @@ class FallbackTests(unittest.TestCase):
             result=fallback.execute(job,lambda *_:None,mother,lambda *_:flow)
         self.assertTrue(result["ok"]);mother.remove.assert_not_called();mother.confirm_removed.assert_called_once()
 
+    def test_configured_status_paid_result_cannot_schedule_reinvite(self):
+        job=self.job();job['verification_only']=True
+        events=[];mother=Mock();flow=Mock();flow.login.return_value=session('personal',job['account']['email'])
+        with patch.object(fallback,'check_plan',return_value='paid'):
+            result=fallback.execute(job,lambda name,*_:events.append(name),mother,lambda *_:flow)
+        self.assertFalse(result['ok']);self.assertFalse(result['retryable'])
+        self.assertEqual(result['code'],'fallback_paid_unconfirmed')
+        self.assertNotIn('fallback_paid',events)
+        flow.submit_export.assert_not_called();mother.invite.assert_not_called()
+
     def test_wrong_user_email_or_team_cannot_query_or_finish(self):
         job=self.job()
         for value in (session(job["mother"]["team_id"],job["account"]["email"]),session("personal","wrong@example.test")):

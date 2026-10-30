@@ -153,6 +153,9 @@ def execute(job, checkpoint, mother, login_factory=PersonalLogin):
         checkpoint("fallback_plan_started", {"user_id": job["child_user_id"]})
         stage = "fallback_plan"
         result = check_plan(flow, session, job)
+        if result == "paid" and job.get("verification_only"):
+            checkpoint("fallback_paid_unconfirmed", {"user_id": job["child_user_id"], "diagnostic": {"code": "fallback_paid_unconfirmed", "http_status": 200}})
+            return {"ok": False, "code": "fallback_paid_unconfirmed", "retryable": False}
         checkpoint("fallback_" + result, {"user_id": job["child_user_id"], "diagnostic": {"code": "fallback_" + result, "http_status": 200}})
         return {"ok": result == "free", "code": "fallback_" + result, "retryable": result == "paid"}
     except Exception as exc:

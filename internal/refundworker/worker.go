@@ -57,7 +57,7 @@ func protocolMessage(code string) string {
 		return "登录或团队会话获取未完成，请管理员检查凭据、代理后续跑。"
 	case "export_rejected":
 		return "导出停用请求被上游拒绝，账号保留在团队内，等待处理。"
-	case "export_uncertain":
+	case "export_uncertain", "export_verification_required":
 		return "停用请求结果待核实，已停止自动重发。"
 	default:
 		return "任务未完成，进度已保留，请管理员核实后续跑。"

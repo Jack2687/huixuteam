@@ -126,6 +126,11 @@ func (s *Store) SaveRefundSettings(ctx context.Context, actor string, v RefundSe
 			return err
 		}
 	}
+	if v.Recovery != nil && v.Recovery.VerificationHTTPStatuses == nil {
+		if err = tx.QueryRow(ctx, "SELECT COALESCE(recovery->'verification_http_statuses','[404]'::jsonb) FROM refund_settings WHERE id FOR UPDATE").Scan(&v.Recovery.VerificationHTTPStatuses); err != nil {
+			return err
+		}
+	}
 	v.ChildProxyID = strings.TrimSpace(v.ChildProxyID)
 	if v.ChildProxyID != "" {
 		var available bool
@@ -175,7 +180,7 @@ func (s *Store) RefundProxies(ctx context.Context) ([]RefundProxy, error) {
 	return out, rows.Err()
 }
 func (s *Store) RefundMothers(ctx context.Context) ([]RefundMother, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.enabled,COALESCE(e.refund_id,''),COALESCE(r.email,''),COALESCE(r.status,''),m.refresh_secret IS NOT NULL,m.plan_type,m.token_expires_at,m.check_json,COALESCE(m.auth_failed_fingerprint=md5(m.secret),false) FROM refund_mothers m LEFT JOIN refund_execution e ON e.mother_id=m.id AND NOT e.released LEFT JOIN refunds r ON r.id=e.refund_id ORDER BY m.name,m.id`)
+	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.name,m.email,m.team_id,m.proxy_id,m.seat_type,m.enabled,COALESCE(e.refund_id,''),COALESCE(r.email,''),COALESCE(r.status,''),m.refresh_secret IS NOT NULL,m.plan_type,m.token_expires_at,m.check_json,COALESCE(m.auth_failed_fingerprint=md5(m.secret),false) FROM refund_mothers m LEFT JOIN refund_execution e ON e.mother_id=m.id AND NOT e.released AND e.mother_released_at IS NULL LEFT JOIN refunds r ON r.id=e.refund_id ORDER BY m.name,m.id`)
 	if err != nil {
 		return nil, err
 	}

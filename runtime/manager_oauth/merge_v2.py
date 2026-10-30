@@ -138,6 +138,7 @@ class TeamProtocolLogin(ProjectProtocolLogin):
             return {"success": False, "retryable": False, "error_code": "export_uncertain", **diagnostic, "error": "导出停用请求中断，结果待确认，保留团队成员"}
         finally:
             self.web_session.curl_infos = original_infos
+        diagnostics.request_event("export", "response", response=resp, started=started)
         try:
             data = resp.json()
         except (ValueError, TypeError):
@@ -150,6 +151,15 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         if 200 <= status < 300 and isinstance(data, dict) and data.get("success") is True:
             bridge.call("merge_v2_accepted", diagnostic={"code": "export_accepted", **diagnostic})
             return {"success": True, "accepted": True, "http_status": status}
+        verify_statuses = self.payload.get("merge_v2", {}).get("verification_http_statuses")
+        if verify_statuses is None:
+            verify_statuses = [404]
+        if 400 <= status <= 599 and status in verify_statuses:
+            diagnostic = {"code": "export_verification_required", **diagnostic}
+            # Persist this policy before returning: later config changes or a
+            # worker restart must never turn the original submission into a retry.
+            bridge.call("merge_v2_verify", diagnostic=diagnostic)
+            return {"success": False, "retryable": False, "error_code": "export_verification_required", **diagnostic}
         # Only a definite rejection clears the submission checkpoint.
         if status in {400, 401, 403, 404, 422, 429}:
             error = data.get("error") if isinstance(data, dict) else None

@@ -198,6 +198,8 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
     step = job["step"]
     child_id = job.get("child_user_id") or ""
     accepted = step in {"accepted", "removing"}
+    if job.get("verification_only") and not accepted and mode not in {"verify", "fallback"}:
+        return {"ok": False, "code": "export_uncertain"}
     if step == "submitting" and mode not in {"verify", "fallback"}:
         return {"ok": False, "code": "export_uncertain"}
     if not job.get("mother_proxy") or (not accepted and mode != "cleanup" and not job.get("child_proxy")):
@@ -226,7 +228,8 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                 "_totp_secret": account["totp_secret"], "proxy": job["child_proxy"],
                 "credential_mode": "chatgpt_at", "configured_login_mode": "password_totp",
                 "selected_login_mode": "password_totp", "allow_sms": False,
-                "skip_phone_verification": True, "merge_v2": {"team_id": job["mother"]["team_id"]},
+                "skip_phone_verification": True, "merge_v2": {"team_id": job["mother"]["team_id"],
+                    "verification_http_statuses": (job["settings"].get("recovery") or {}).get("verification_http_statuses", [404])},
             }
             if mode == "verify":
                 from refund_recovery import verify

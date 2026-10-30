@@ -101,8 +101,11 @@ CREATE TABLE IF NOT EXISTS refund_execution (
  lease_token TEXT NOT NULL DEFAULT '', lease_until TIMESTAMPTZ,
  released BOOLEAN NOT NULL DEFAULT false, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- A reservation survives worker crashes and attention states. One mother = one job.
-CREATE UNIQUE INDEX IF NOT EXISTS refund_execution_mother_serial ON refund_execution(mother_id) WHERE NOT released;
+-- Release a verified-clean mother independently of the unresolved service fee.
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS verification_only BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS mother_released_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS refund_execution_mother_reserved ON refund_execution(mother_id) WHERE NOT released AND mother_released_at IS NULL;
+DROP INDEX IF EXISTS refund_execution_mother_serial;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS progress_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE refunds ALTER COLUMN message SET DEFAULT '申请已受理';
 
@@ -151,6 +154,8 @@ ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS fallback_attempts INTEGER 
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS completion_basis TEXT NOT NULL DEFAULT '';
 UPDATE refund_settings SET recovery=recovery || '{"plan_fallback":{"enabled":true,"max_cycles":2,"max_attempts":3,"retry_seconds":30}}'::jsonb
  WHERE NOT recovery ? 'plan_fallback';
+UPDATE refund_settings SET recovery=recovery || '{"verification_http_statuses":[404]}'::jsonb
+ WHERE NOT recovery ? 'verification_http_statuses';
 CREATE TABLE IF NOT EXISTS refund_execution_diagnostics (
  id BIGSERIAL PRIMARY KEY, refund_id TEXT NOT NULL REFERENCES refunds(id),
  diagnostic JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()

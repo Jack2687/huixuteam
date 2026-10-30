@@ -5,15 +5,17 @@ import ResourceCheckSummary from "./ResourceCheckSummary.vue";
 import type { ResourceCheck } from "../lib/resource-check";
 import Modal from "./Modal.vue";
 import RefundDetail from "./RefundDetail.vue";
+import { parseVerificationStatuses } from "../lib/admin-verification-statuses";
 type ProxyRow = { check?:ResourceCheck; id:string; name:string; enabled:boolean; has_secret:boolean; url?:string };
 type Mother = { auth_blocked?:boolean; check?:ResourceCheck; id:string; name:string; email:string; team_id:string; proxy_id:string; seat_type:string; enabled:boolean; has_secret:boolean; access_token?:string; session?:string; refresh_token?:string; has_refresh?:boolean; plan_type?:string; token_expires_at?:string; active_refund?:string; active_email?:string; active_status?:string };
 type CredentialPreview = {email:string;team_id:string;plan_type:string;expires_at:string|null;has_refresh:boolean};
-type Recovery={plan_fallback?:{enabled:boolean;max_cycles:number;max_attempts:number;retry_seconds:number};enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
+type Recovery={verification_http_statuses?:number[];plan_fallback?:{enabled:boolean;max_cycles:number;max_attempts:number;retry_seconds:number};enabled:boolean;max_retries:number;verify_intervals:number[];cleanup_intervals:number[];alert_seconds:number;cleanup_failed:boolean};
 type Settings = { mother_failover:{enabled:boolean;max_switches:number;retry_seconds:number}; recovery:Recovery; enabled:boolean; max_parallel:number; max_attempts:number; retry_seconds:number; child_proxy_id:string; mother_interval_seconds:number };
 const emit=defineEmits<{toast:[message:string]}>();
 const settings=ref<Settings>({mother_failover:{enabled:true,max_switches:3,retry_seconds:30},recovery:{plan_fallback:{enabled:true,max_cycles:2,max_attempts:3,retry_seconds:30},enabled:true,max_retries:3,verify_intervals:[30,60,120,300],cleanup_intervals:[15,30,60],alert_seconds:600,cleanup_failed:true},enabled:false,max_parallel:2,max_attempts:2,retry_seconds:30,child_proxy_id:"",mother_interval_seconds:0});
 const intervalText=(key:'verify_intervals'|'cleanup_intervals')=>computed({get:()=>settings.value.recovery[key].join(', '),set:(value:string)=>{settings.value.recovery[key]=value.split(/[,，\s]+/).filter(Boolean).map(Number)}});
 const verifyIntervals=intervalText('verify_intervals'),cleanupIntervals=intervalText('cleanup_intervals');
+const verificationStatuses=ref("404");
 const mothers=ref<Mother[]>([]),proxies=ref<ProxyRow[]>([]),busy=ref(false),error=ref(""),formError=ref(""),modal=ref(""),detail=ref("");
 const mother=ref<Mother>({id:"",name:"",email:"",team_id:"",proxy_id:"",seat_type:"default",enabled:true,has_secret:false,access_token:""});
 const proxy=ref<ProxyRow>({id:"",name:"",url:"",enabled:true,has_secret:false});
@@ -28,12 +30,12 @@ const proxyInput=()=>{const {check,...value}=proxy.value;return value};
 const displayTime=(value:string)=>new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
 async function load(){
  busy.value=true;error.value="";
- try{const d=await api<{settings:Settings;mothers:Mother[];proxies:ProxyRow[]}>("/api/admin/refund-settings");settings.value=d.settings;settings.value.recovery.plan_fallback??={enabled:true,max_cycles:2,max_attempts:3,retry_seconds:30};mothers.value=d.mothers;proxies.value=d.proxies}
+ try{const d=await api<{settings:Settings;mothers:Mother[];proxies:ProxyRow[]}>("/api/admin/refund-settings");settings.value=d.settings;settings.value.recovery.plan_fallback??={enabled:true,max_cycles:2,max_attempts:3,retry_seconds:30};verificationStatuses.value=(settings.value.recovery.verification_http_statuses??[404]).join(',');mothers.value=d.mothers;proxies.value=d.proxies}
  catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 async function saveSettings(){
  busy.value=true;error.value="";
- try{await api("/api/admin/refund-settings",{method:"PUT",body:JSON.stringify(settings.value)});emit("toast","执行设置已保存");await load()}
+ try{settings.value.recovery.verification_http_statuses=parseVerificationStatuses(verificationStatuses.value);await api("/api/admin/refund-settings",{method:"PUT",body:JSON.stringify(settings.value)});emit("toast","执行设置已保存");await load()}
  catch(e){error.value=(e as Error).message}finally{busy.value=false}
 }
 function editMother(row?:Mother){
@@ -122,6 +124,8 @@ onMounted(load);
     <fieldset class="recovery-settings">
      <legend>异常恢复与占用告警</legend>
      <label class="checkbox-label"><input v-model="settings.recovery.enabled" type="checkbox"/>启用自动恢复与结果核验</label>
+     <label>提交后转入结果核验的状态码（英文逗号分隔）<input v-model="verificationStatuses" placeholder="404" maxlength="180"/></label>
+     <p class="muted">默认 404，可填写 404,409 等状态码；留空关闭额外匹配。仅用于最后提交阶段，命中后先核验实际结果，不直接判失败、不自动重新提交。自动恢复与套餐兜底开关控制后续核验。</p>
      <div class="form-row">
       <label>自动重试次数（首次失败之后）<input v-model.number="settings.recovery.max_retries" type="number" min="0" max="10" required/></label>
       <label>核实各轮间隔（秒，逗号分隔）<input v-model="verifyIntervals" required placeholder="30, 60, 120, 300"/></label>
@@ -141,6 +145,7 @@ onMounted(load);
       <label>兜底及再次办理间隔（秒）<input v-model.number="settings.recovery.plan_fallback.retry_seconds" type="number" min="5" max="3600" required/></label>
      </div>
      <p class="muted">默认开启，等待 30 秒后启动，最多 2 轮、每轮 3 次。确认移出后重新登录；个人套餐为 Free 时按业务规则完成服务并结算，仍为付费套餐时保留原单重新邀请办理。未知套餐、登录失败和查询失败仅重试核验，不视为成功；Free 不代表退款到账。关闭自动恢复会暂停尚未开始的兜底。</p>
+     <p class="muted">命中上方结果核验状态码的申请，只按每轮核验上限与间隔检查，不重新邀请办理。确认移出后释放母号供后续申请使用，费用继续冻结；超过核验上限转待跟进，确认 Free 后只结算一次。</p>
     </fieldset>
     <button class="button primary" :disabled="busy">应用调度配置</button>
    </form>
