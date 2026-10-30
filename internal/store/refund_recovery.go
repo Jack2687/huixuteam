@@ -91,6 +91,7 @@ var recoveryReasons = map[string]string{
 	"export_not_sent":              "连接未建立，请求尚未发送",
 	"export_accepted":              "已收到明确受理确认",
 	"login_failed":                 "账号登录未完成",
+	"login_response_incomplete":    "登录响应不完整，等待重新登录",
 	"team_session_expired":         "会话需要更新",
 	"extra_verification":           "账号需要补充验证",
 	"account_unavailable":          "账号当前不可用",
@@ -121,6 +122,9 @@ func (d RefundDiagnostic) Sanitized() RefundDiagnostic {
 	}
 	if _, ok := recoveryReasons[d.Code]; !ok {
 		d.Code = "protocol_failed"
+		d.Retryable = false
+	}
+	if d.Code == "extra_verification" {
 		d.Retryable = false
 	}
 	if d.HTTPStatus < 100 || d.HTTPStatus > 599 {
@@ -200,14 +204,16 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 				nextMode = "cleanup"
 				delay = cfg.CleanupIntervals[cleanups]
 			}
-		case fallbackPhase == "reinvite":
+		case fallbackPhase == "reinvite" && d.Code != "extra_verification":
 			if cfg.PlanFallback != nil && cfg.PlanFallback.Enabled {
 				nextMode, delay = "retry", cfg.PlanFallback.RetrySeconds
 			}
 		case d.Retryable && retries < cfg.MaxRetries:
 			nextMode = "retry"
 			delay = j.Settings.RetrySeconds
-		case cfg.CleanupFailed && oneOf(step, "assigned", "inviting", "invited", "login", "ready") && !oneOf(d.Code, "mother_identity", "member_identity", "extra_verification", "proxy_missing", "protocol_failed"):
+		case cfg.CleanupFailed && oneOf(step, "assigned", "inviting", "invited", "login", "ready") && !oneOf(d.Code, "mother_identity", "member_identity", "proxy_missing", "protocol_failed"):
+			// An explicit verification requirement is not retryable, but before
+			// submission it can safely end after confirmed scoped cleanup.
 			nextMode = "cleanup"
 			delay = cfg.CleanupIntervals[0]
 		}

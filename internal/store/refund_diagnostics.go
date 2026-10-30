@@ -9,6 +9,9 @@ import (
 
 // Strict enums are deliberate: upstream-controlled text never becomes a log.
 type RefundEvidence struct {
+	LoginPage         string `json:"login_page,omitempty"`
+	ContinueKind      string `json:"continue_kind,omitempty"`
+	VerificationMode  string `json:"verification_mode,omitempty"`
 	TransportState    string `json:"transport_state,omitempty"`
 	ProxyHTTPStatus   int    `json:"proxy_http_status,omitempty"`
 	Stage             string `json:"stage,omitempty"`
@@ -44,12 +47,15 @@ func evidenceNumber(value, maximum int) int {
 	return value
 }
 func (v RefundEvidence) Sanitized() *RefundEvidence {
+	v.LoginPage = evidenceEnum(v.LoginPage, "login_password email_otp_verification mfa_challenge consent auth_challenge passkey phone_verification missing other")
+	v.ContinueKind = evidenceEnum(v.ContinueKind, "none other email password mfa callback consent")
+	v.VerificationMode = evidenceEnum(v.VerificationMode, "missing other passwordless_login login signup")
 	v.TransportState = evidenceEnum(v.TransportState, "tls_before_request")
 	v.ProxyHTTPStatus = evidenceNumber(v.ProxyHTTPStatus, 599)
 	v.Stage = evidenceEnum(v.Stage, "login csrf signin authorize identifier password mfa_challenge mfa_verify workspace callback session sentinel email_verification personal_check members_read invites_read invite_send invite_revoke member_remove mother_operation export runtime checkpoint fallback_remove fallback_login fallback_plan")
 	v.Side = evidenceEnum(v.Side, "child mother worker")
 	v.Event = evidenceEnum(v.Event, "start response error failure truncated")
-	v.Reason = evidenceEnum(v.Reason, evidenceReasons)
+	v.Reason = evidenceEnum(v.Reason, evidenceReasons+" extra_verification login_response_incomplete login_step_unsupported")
 	v.UpstreamCode = evidenceEnum(v.UpstreamCode, evidenceReasons)
 	v.Exception = evidenceEnum(v.Exception, "RuntimeError ValueError KeyError TypeError AttributeError ImportError ModuleNotFoundError TimeoutError OSError ConnectionError LoginFlowError DeadAccountError NeedsVerification UpstreamFailure VerificationUnavailable RequestsError ProxyError SSLError DNSError ConnectTimeout ReadTimeout ConnectionResetError JSONDecodeError other")
 	v.BodyKind = evidenceEnum(v.BodyKind, "json html text")

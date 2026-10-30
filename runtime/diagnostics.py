@@ -16,6 +16,7 @@ STAGES = {
 }
 REASONS = set("csrf_or_risk_blocked chatgpt_signin_failed oauth_session_missing chatgpt_rate_limited totp_secret_missing totp_secret_invalid totp_factor_missing totp_dep_missing phone_verification_skipped passkey_or_challenge account_deactivated account_deleted account_banned account_disabled account_suspended incorrect_password invalid_password login_auth_failed invalid_grant invalid_workspace_selected invalid_session invalid_auth_step token_expired rate_limit_exceeded invalid_totp_code invalid_otp".split())
 EXCEPTIONS = set("RuntimeError ValueError KeyError TypeError AttributeError ImportError ModuleNotFoundError TimeoutError OSError ConnectionError LoginFlowError DeadAccountError NeedsVerification UpstreamFailure VerificationUnavailable RequestsError ProxyError SSLError DNSError ConnectTimeout ReadTimeout ConnectionResetError JSONDecodeError".split())
+REASONS.update({"extra_verification", "login_response_incomplete", "login_step_unsupported"})
 FILES = {"refund_runner.py", "refund_recovery.py", "refund_plan_fallback.py", "diagnostics.py", "adapter.py", "upstream.py", "merge_v2.py", "bridge.py", "tls.py", "sentinel_vm.py"}
 _sink = None
 _count = 0
@@ -42,6 +43,9 @@ def exception_evidence(exc, operation, side="child", flow=None):
     evidence = {"stage": operation, "side": side, "event": "failure",
                 "reason": code if isinstance(code, str) and code in REASONS else "unknown_error",
                 "exception": type(exc).__name__ if type(exc).__name__ in EXCEPTIONS else "other"}
+    login_evidence = getattr(flow, "_login_step_evidence", None)
+    if isinstance(login_evidence, dict):
+        evidence.update({k: login_evidence[k] for k in ("login_page", "continue_kind", "verification_mode") if k in login_evidence})
     network = integer(getattr(exc, "network_code", 0), 999)
     current, seen = exc, set()
     while current is not None and id(current) not in seen and len(seen) < 8:
@@ -75,6 +79,28 @@ def record(evidence, **numbers):
 def failure(exc, operation, side="child", flow=None):
     evidence = exception_evidence(exc, operation, side, flow)
     record(evidence["evidence"], http_status=evidence["http_status"], network_code=evidence["network_code"])
+    return evidence
+
+
+def login_step(data, operation):
+    # Fixed categories only. No URLs, response bodies, factor IDs or OTPs.
+    from manager_oauth.upstream import ChatGPTProtocolLogin
+    page = ChatGPTProtocolLogin.extract_page_type(data).lower()
+    mode = ChatGPTProtocolLogin.extract_email_verification_mode(data).lower()
+    url = ChatGPTProtocolLogin.extract_continue_url(data)
+    known_pages = {"login_password", "email_otp_verification", "mfa_challenge", "consent", "auth_challenge", "passkey", "phone_verification"}
+    kind = "none"
+    if url:
+        kind = "other"
+        for marker, category in [("/email-verification", "email"), ("/log-in/password", "password"), ("/mfa-challenge", "mfa"), ("/auth/callback", "callback"), ("/consent", "consent")]:
+            if marker in urlsplit(url).path.lower():
+                kind = category
+                break
+    evidence = {"stage": operation, "side": "child", "event": "response",
+                "login_page": page if page in known_pages else ("other" if page else "missing"),
+                "continue_kind": kind,
+                "verification_mode": mode if mode in {"passwordless_login", "login", "signup"} else ("other" if mode else "missing")}
+    record(evidence)
     return evidence
 
 

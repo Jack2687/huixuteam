@@ -200,6 +200,14 @@ func TestPassword401CheckpointGuardsAndInterruptedCleanup(t *testing.T) {
 }
 
 func TestUnclassifiedLogin401RetriesBeforeCleanupAndCanSucceed(t *testing.T) {
+	checkLoginRetryBeforeCleanup(t, "login_auth_failed", 401)
+}
+
+func TestIncompleteLoginResponseRetriesBeforeCleanupAndCanSucceed(t *testing.T) {
+	checkLoginRetryBeforeCleanup(t, "login_response_incomplete", 200)
+}
+
+func checkLoginRetryBeforeCleanup(t *testing.T, code string, status int) {
 	for _, succeeds := range []bool{true, false} {
 		t.Run(map[bool]string{true: "retry_succeeds", false: "retry_exhausted"}[succeeds], func(t *testing.T) {
 			s, a, u := executionFixture(t, 1)
@@ -221,8 +229,8 @@ func TestUnclassifiedLogin401RetriesBeforeCleanupAndCanSucceed(t *testing.T) {
 			originalID, motherID, proxy := j.ID, j.Mother.ID, j.ChildProxy
 			for n := 0; n <= cfg.Recovery.MaxRetries; n++ {
 				checkpoint(t, s, j, "login")
-				if err = s.FinishRefundAttempt(ctx, j, store.RefundDiagnostic{Code: "login_auth_failed", HTTPStatus: 401, Retryable: true,
-					Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Reason: "login_auth_failed"}}); err != nil {
+				if err = s.FinishRefundAttempt(ctx, j, store.RefundDiagnostic{Code: code, HTTPStatus: status, Retryable: true,
+					Evidence: &store.RefundEvidence{Stage: "password", Side: "child", Reason: code}}); err != nil {
 					t.Fatal(err)
 				}
 				var terminal string

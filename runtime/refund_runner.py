@@ -20,7 +20,7 @@ class StopProtocol(BaseException):
 
 
 class NeedsVerification(Exception):
-    pass
+    code = "extra_verification"
 
 
 class UpstreamFailure(Exception):
@@ -37,6 +37,33 @@ def rpc(method, params=None, **kwargs):
 
 
 class CustomerLogin(TeamProtocolLogin):
+    def inspect_login_step(self, step, operation):
+        # The generic login client falls back to email OTP when the next URL is
+        # absent. This service has password/TOTP only: absence is not OTP proof.
+        data = step if isinstance(step, dict) else {}
+        self._login_step_evidence = diagnostics.login_step(data, operation)
+        page = self.extract_page_type(data).lower()
+        url = self.normalize_auth_url(self.extract_continue_url(data))
+        self.raise_if_passkey_or_challenge(data, url)
+        if page == "email_otp_verification" or "/email-verification" in url.lower():
+            raise NeedsVerification()
+        if not url and page not in {"login_password", "mfa_challenge"}:
+            incomplete = not page and not data.get("error") and not self.needs_phone_verification(data)
+            raise upstream.LoginFlowError(
+                "Login response has no usable next step",
+                code="login_response_incomplete" if incomplete else "login_step_unsupported",
+                retryable=incomplete,
+            )
+
+    def complete_modern_login(self, step, password, issued_after):
+        self.inspect_login_step(step, "identifier")
+        return super().complete_modern_login(step, password, issued_after)
+
+    def submit_modern_password(self, password):
+        step = super().submit_modern_password(password)
+        self.inspect_login_step(step, "password")
+        return step
+
     def log(self, step, message, level="info"):
         if step == "waiting_code":
             raise NeedsVerification()
@@ -277,7 +304,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                         checkpoint("cleanup_completed")
                         return {"ok": True}
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
-                    code = "login_auth_failed" if isinstance(exc, upstream.LoginFlowError) and exc.code == "login_auth_failed" else "login_failed"
+                    code = exc.code if isinstance(exc, upstream.LoginFlowError) and exc.code in {"login_auth_failed", "login_response_incomplete"} else "login_failed"
                     result = {"success": False, "retryable": retry, "error_code": code, **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
                     if flow is not None:
