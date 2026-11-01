@@ -60,8 +60,8 @@ func evidenceNumber(value, maximum int) int {
 	return value
 }
 func (v RefundEvidence) Sanitized() *RefundEvidence {
-	v.LoginPage = evidenceEnum(v.LoginPage, "login_password email_otp_verification mfa_challenge consent auth_challenge passkey phone_verification missing other")
-	v.ContinueKind = evidenceEnum(v.ContinueKind, "none other email password mfa callback consent")
+	v.LoginPage = evidenceEnum(v.LoginPage, "login login_password email_otp_verification mfa_challenge consent auth_challenge passkey phone_verification missing other")
+	v.ContinueKind = evidenceEnum(v.ContinueKind, "none other email password login mfa challenge passkey phone callback consent")
 	v.VerificationMode = evidenceEnum(v.VerificationMode, "missing other passwordless_login login signup")
 	v.TransportState = evidenceEnum(v.TransportState, "tls_before_request")
 	v.ProxyHTTPStatus = evidenceNumber(v.ProxyHTTPStatus, 599)
@@ -85,7 +85,7 @@ func (v RefundEvidence) Sanitized() *RefundEvidence {
 		v.Membership = nil
 	}
 	v.Event = evidenceEnum(v.Event, "start response error failure truncated")
-	v.Reason = evidenceEnum(v.Reason, evidenceReasons+" extra_verification login_response_incomplete login_step_unsupported")
+	v.Reason = evidenceEnum(v.Reason, evidenceReasons+" extra_verification login_response_incomplete login_step_unsupported team_session_expired personal_session_conflict")
 	v.UpstreamCode = evidenceEnum(v.UpstreamCode, evidenceReasons)
 	v.Exception = evidenceEnum(v.Exception, "RuntimeError ValueError KeyError TypeError AttributeError ImportError ModuleNotFoundError TimeoutError OSError ConnectionError LoginFlowError DeadAccountError NeedsVerification UpstreamFailure VerificationUnavailable RequestsError ProxyError SSLError DNSError ConnectTimeout ReadTimeout ConnectionResetError JSONDecodeError other")
 	v.BodyKind = evidenceEnum(v.BodyKind, "json html text")

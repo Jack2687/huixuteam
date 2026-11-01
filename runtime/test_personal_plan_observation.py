@@ -12,8 +12,10 @@ from test_merge_v2 import session
 
 
 class PersonalPlanObservationTests(unittest.TestCase):
-    def run_flow(self, fixture_type=ProxyFlow, configure=None):
+    def run_flow(self, fixture_type=ProxyFlow, configure=None, recovery=False):
         value, evidence, sessions = job(), [], []
+        if recovery:
+            value["settings"]["recovery"] = {"enabled": True}
         def factory(*args):
             flow = runner.CustomerLogin(*args)
             sessions.append(flow.web_session)
@@ -119,9 +121,13 @@ class PersonalPlanObservationTests(unittest.TestCase):
                 if url.path == "/authorize-team":
                     return 302, {}, {"Location": "https://auth.openai.com/log-in/password"}
                 return super().reply(role, method, url, headers, raw)
-        result, fixture, _, _ = self.run_flow(Reauthentication)
+        result, fixture, _, _ = self.run_flow(Reauthentication, recovery=True)
         self.assertFalse(result["ok"])
-        self.assertFalse(result.get("retryable", False))
+        self.assertTrue(result["retryable"])
+        self.assertEqual(result["code"], "team_session_expired")
+        self.assertEqual(result["evidence"]["reason"], "team_session_expired")
+        self.assertEqual(result["evidence"]["login_page"], "login_password")
+        self.assertEqual(result["evidence"]["continue_kind"], "password")
         paths = [path for _, _, path, _, _ in fixture.records]
         self.assertEqual(paths.count("/api/accounts/password/verify"), 1)
         self.assertEqual(paths.count("/api/accounts/mfa/verify"), 1)
@@ -136,6 +142,75 @@ class PersonalPlanObservationTests(unittest.TestCase):
         result, fixture, _, _ = self.run_flow(StalePersonal)
         self.assertFalse(result["ok"])
         self.assertFalse(any(path.endswith("export_and_deactivate") for _, _, path, _, _ in fixture.records))
+
+    def test_personal_conflict_then_reauthentication_recovers_on_scheduled_attempt(self):
+        class ConflictOnce(ProxyFlow):
+            conflict = False
+            def reply(self, role, method, url, headers, raw):
+                if url.path.endswith("workspace/select") and json.loads(raw)["workspace_id"] == "fixture-personal" and not self.conflict:
+                    self.conflict = True
+                    return 409, {"error": {"code": "private-upstream-code"}}, {}
+                if url.path == "/authorize-team" and self.authorization == 2:
+                    return 302, {}, {"Location": "https://auth.openai.com/log-in?private=not-logged"}
+                return super().reply(role, method, url, headers, raw)
+        value, events = job(), []
+        value["settings"]["recovery"] = {"enabled": True}
+        with ConflictOnce(value) as fixture:
+            first = runner.execute(value, lambda name, *args: events.append((name, args)), sleep=Mock(side_effect=AssertionError("scheduler owns the delay")))
+            self.assertFalse(first["ok"])
+            self.assertTrue(first["retryable"])
+            self.assertEqual(first["code"], "team_session_expired")
+            self.assertEqual(first["evidence"]["login_page"], "login")
+            self.assertEqual(first["evidence"]["continue_kind"], "login")
+            paths = [path for _, _, path, _, _ in fixture.records]
+            self.assertEqual(paths.count("/api/accounts/password/verify"), 1)
+            self.assertFalse(any(path.endswith("export_and_deactivate") or path.endswith("users/child-user") for path in paths))
+            detail = [args[0]["diagnostic"] for name, args in events if name == "diagnostic"]
+            self.assertTrue(any(d.get("http_status") == 409 and d["evidence"].get("reason") == "personal_session_conflict" for d in detail))
+            self.assertNotIn("private-upstream-code", json.dumps(detail))
+            self.assertNotIn("not-logged", json.dumps(detail))
+            # Simulate only the scheduler's subsequent claim, without another invite.
+            value.update(step="login", recovery_mode="retry")
+            second = runner.execute(value, lambda name, *args: events.append((name, args)))
+            self.assertTrue(second["ok"])
+        self.assertEqual(fixture.errors, [])
+        paths = [path for _, _, path, _, _ in fixture.records]
+        self.assertEqual(paths.count("/api/accounts/password/verify"), 2)
+        self.assertEqual(paths.count("/api/accounts/mfa/verify"), 2)
+        self.assertEqual(paths.count("/backend-api/accounts/export_and_deactivate"), 1)
+        self.assertEqual(sum(name == "inviting" for name, _ in events), 1)
+        self.assertEqual(sum(name == "completed" for name, _ in events), 1)
+
+    def test_personal_selection_conflict_does_not_stop_a_usable_team_session(self):
+        class Conflict(ProxyFlow):
+            def reply(self, role, method, url, headers, raw):
+                if url.path.endswith("workspace/select") and json.loads(raw)["workspace_id"] == "fixture-personal":
+                    return 409, {}, {}
+                return super().reply(role, method, url, headers, raw)
+        result, fixture, _, _ = self.run_flow(Conflict, recovery=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(sum(path.endswith("export_and_deactivate") for _, _, path, _, _ in fixture.records), 1)
+
+    def test_explicit_team_verification_is_not_retried(self):
+        for path, page, code in [
+            ("/email-verification", "email_otp_verification", "extra_verification"),
+            ("/mfa-challenge", "mfa_challenge", "extra_verification"),
+            ("/auth-challenge", "auth_challenge", "login_failed"),
+            ("/passkey", "passkey", "login_failed"),
+            ("/phone-verification", "phone_verification", "login_failed"),
+        ]:
+            class Challenge(ProxyFlow):
+                def reply(self, role, method, url, headers, raw):
+                    if url.path == "/authorize-team":
+                        return 302, {}, {"Location": "https://auth.openai.com" + path}
+                    return super().reply(role, method, url, headers, raw)
+            with self.subTest(path=path):
+                result, fixture, _, _ = self.run_flow(Challenge, recovery=True)
+                self.assertEqual(result["code"], code)
+                self.assertFalse(result["retryable"])
+                self.assertEqual(result["evidence"]["login_page"], page)
+                self.assertFalse(any(p.endswith("export_and_deactivate") for _, _, p, _, _ in fixture.records))
+
 
     def test_direct_default_callback_is_not_consumed_before_target_selection(self):
         class DefaultCallback(ProxyFlow):

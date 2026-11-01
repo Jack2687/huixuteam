@@ -81,6 +81,9 @@ def select_personal_workspace(flow, referer_url):
                             headers=flow.headers(url, {"Accept": "application/json", "Origin": "https://auth.openai.com", "Referer": referer_url}), timeout=15)
     if response.status in {301, 302, 303, 307, 308} and response.location():
         return urljoin(url, response.location())
+    if response.status == 409:
+        raise upstream.LoginFlowError("Personal workspace selection conflicted with the current session",
+                                      code="personal_session_conflict", status=409, retryable=True)
     next_url = flow.extract_continue_url(response.json()) if response.status == 200 else ""
     if not next_url:
         raise RuntimeError("Personal authorization did not return a continuation")
@@ -153,6 +156,9 @@ The personal callback has already consumed its authorization code/state. Obtain
 new web state through the ordinary sign-in entry, requesting consent rather
 than password reauthentication, then select the exact configured team.
 """
+    # Password/MFA evidence belongs to the completed credential step, not to
+    # the new authorization. Record the current redirect category if it fails.
+    flow._login_step_evidence = {}
     csrf = flow.get_csrf_token()
     url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode({
         "prompt": "consent", "ext-oai-did": flow.device_id,
@@ -190,11 +196,25 @@ than password reauthentication, then select the exact configured team.
         if parsed.hostname != "auth.openai.com":
             raise RuntimeError("Team authorization ended before workspace selection")
         lowered = parsed.path.lower()
-        if any(part in lowered for part in ("/log-in", "/login", "/password", "/mfa", "/email-verification", "/auth-challenge", "/passkey", "/phone-verification")):
-            # The normal recovery policy may handle a failed attempt. This
-            # transition itself never resubmits a password or a 2FA code.
-            raise upstream.LoginFlowError("Existing authentication is insufficient for team authorization",
-                                          code="team_session_switch_failed", retryable=False)
+        for marker, page, kind in (
+            ("/email-verification", "email_otp_verification", "email"),
+            ("/mfa", "mfa_challenge", "mfa"),
+            ("/auth-challenge", "auth_challenge", "challenge"),
+            ("/passkey", "passkey", "passkey"),
+            ("/phone-verification", "phone_verification", "phone"),
+            ("/password", "login_password", "password"),
+            ("/log-in", "login", "login"),
+            ("/login", "login", "login"),
+        ):
+            if marker not in lowered:
+                continue
+            flow._login_step_evidence = {"login_page": page, "continue_kind": kind, "verification_mode": "missing"}
+            retryable = kind in {"login", "password"}
+            code = "team_session_expired" if retryable else ("extra_verification" if kind in {"email", "mfa"} else "login_step_unsupported")
+            # Return to the existing bounded scheduler, never loop credentials
+            # inside this transition or retry an explicit verification challenge.
+            raise upstream.LoginFlowError("Team authorization requires authentication",
+                                          code=code, retryable=retryable)
         response = flow.request(current, headers=flow.headers(current, {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}), timeout=20)
         if response.status in {301, 302, 303, 307, 308} and response.location():
             current = urljoin(current, response.location())
@@ -216,6 +236,7 @@ than password reauthentication, then select the exact configured team.
 
 def finish_personal_then_team(flow, continue_url):
     observe(flow, "authenticated_before_callback")
+    flow._login_step_evidence = {}
     flow._selecting_personal_plan = True
     original_continuation_usable = False
     personal_user = ""
@@ -225,8 +246,9 @@ def finish_personal_then_team(flow, continue_url):
     except PersonalWorkspaceUnavailable:
         record("missing")
         original_continuation_usable = True
-    except Exception:
-        record("unavailable")
+    except Exception as exc:
+        detail = diagnostics.failure(exc, "workspace_observation", flow=flow)
+        record("unavailable", status=detail["http_status"], network_code=detail["network_code"])
     finally:
         flow._selecting_personal_plan = False
     if original_continuation_usable:

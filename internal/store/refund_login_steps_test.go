@@ -9,6 +9,75 @@ import (
 	"llm-refund/internal/store"
 )
 
+func TestTeamSessionRecoveryHonorsConfiguredDelayAndLimit(t *testing.T) {
+	s, a, u := executionFixture(t, 1)
+	enableRecovery(t, s, a)
+	ctx := context.Background()
+	cfg, err := s.RefundSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Recovery.MaxRetries = 2
+	cfg.RetrySeconds = 37
+	if err = s.SaveRefundSettings(ctx, a.ID, cfg); err != nil {
+		t.Fatal(err)
+	}
+	submitRequests(t, s, u, 1)
+	j, err := s.ClaimRefund(ctx)
+	if err != nil || j == nil {
+		t.Fatal(j, err)
+	}
+	checkpoint(t, s, j, "inviting")
+	checkpoint(t, s, j, "invited")
+	original := j
+	for attempt := 0; attempt <= 2; attempt++ {
+		checkpoint(t, s, j, "login")
+		d := store.RefundDiagnostic{Code: "team_session_expired", Retryable: true, HTTPStatus: 302,
+			Evidence: &store.RefundEvidence{Stage: "authorize", Side: "child", Reason: "team_session_expired", LoginPage: "login", ContinueKind: "login"}}
+		if err = s.FinishRefundAttempt(ctx, j, d); err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.Refund(ctx, u.ID, j.ID)
+		if err != nil || r.FeeStatus != "frozen" {
+			t.Fatal(r, err)
+		}
+		if next, err := s.ClaimRefund(ctx); err != nil || next != nil {
+			t.Fatal("interval ignored", next, err)
+		}
+		var delay float64
+		var retries int
+		if err = s.Pool.QueryRow(ctx, "SELECT EXTRACT(EPOCH FROM next_attempt_at-now()),retry_count FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&delay, &retries); err != nil {
+			t.Fatal(err)
+		}
+		if retries != attempt {
+			t.Fatal("retry count", retries, attempt)
+		}
+		if attempt < 2 && (delay < 30 || delay > 37) {
+			t.Fatal("configured delay ignored", delay)
+		}
+		recoveryDue(t, s, j.ID)
+		next, err := s.ClaimRefund(ctx)
+		if err != nil || next == nil {
+			t.Fatal(next, err)
+		}
+		mode := "retry"
+		if attempt == 2 {
+			mode = "cleanup"
+		}
+		if next.RecoveryMode != mode || next.ID != original.ID || next.Mother.ID != original.Mother.ID || (mode == "retry" && next.ChildProxy != original.ChildProxy) {
+			t.Fatal("recovery context changed", next.RecoveryMode)
+		}
+		j = next
+	}
+	checkpoint(t, s, j, "cleanup_started")
+	checkpoint(t, s, j, "cleanup_completed")
+	assertAutoRelease(t, s, j)
+	if err = s.FinishRefundAttempt(ctx, original, store.RefundDiagnostic{Code: "team_session_expired", Retryable: true}); err != nil {
+		t.Fatal(err)
+	}
+	assertAutoRelease(t, s, j)
+}
+
 func TestExtraVerificationCleansBeforeReleaseWithoutLoginRetry(t *testing.T) {
 	for _, cleanup := range []bool{true, false} {
 		t.Run(map[bool]string{true: "cleanup", false: "manual"}[cleanup], func(t *testing.T) {
@@ -79,23 +148,33 @@ func TestExtraVerificationCleansBeforeReleaseWithoutLoginRetry(t *testing.T) {
 }
 
 func TestLoginFailureAfterSubmissionStillOnlyVerifies(t *testing.T) {
-	s, a, u := executionFixture(t, 1)
-	enableRecovery(t, s, a)
-	submitRequests(t, s, u, 1)
-	ctx := context.Background()
-	j, _ := s.ClaimRefund(ctx)
-	prepareExport(t, s, j)
-	if err := s.FinishRefundAttempt(ctx, j, store.RefundDiagnostic{Code: "login_response_incomplete", Retryable: true}); err != nil {
-		t.Fatal(err)
-	}
-	recoveryDue(t, s, j.ID)
-	next, err := s.ClaimRefund(ctx)
-	if err != nil || next == nil || next.RecoveryMode != "verify" || next.Step != "submitting" {
-		t.Fatal(next, err)
+	for _, code := range []string{"login_response_incomplete", "team_session_expired"} {
+		t.Run(code, func(t *testing.T) {
+			s, a, u := executionFixture(t, 1)
+			enableRecovery(t, s, a)
+			submitRequests(t, s, u, 1)
+			ctx := context.Background()
+			j, _ := s.ClaimRefund(ctx)
+			prepareExport(t, s, j)
+			if err := s.FinishRefundAttempt(ctx, j, store.RefundDiagnostic{Code: code, Retryable: true}); err != nil {
+				t.Fatal(err)
+			}
+			recoveryDue(t, s, j.ID)
+			next, err := s.ClaimRefund(ctx)
+			if err != nil || next == nil || next.RecoveryMode != "verify" || next.Step != "submitting" {
+				t.Fatal(next, err)
+			}
+		})
 	}
 }
 
 func TestLoginStepEvidenceAllowlist(t *testing.T) {
+	for _, reason := range []string{"team_session_expired", "personal_session_conflict"} {
+		e := store.RefundEvidence{Reason: reason, LoginPage: "login", ContinueKind: "login"}.Sanitized()
+		if e.Reason != reason || e.LoginPage != "login" || e.ContinueKind != "login" {
+			t.Fatal(e)
+		}
+	}
 	v := store.RefundEvidence{LoginPage: "email_otp_verification", ContinueKind: "email", VerificationMode: "passwordless_login", Reason: "extra_verification"}.Sanitized()
 	if v.LoginPage != "email_otp_verification" || v.Reason != "extra_verification" {
 		t.Fatal(v)

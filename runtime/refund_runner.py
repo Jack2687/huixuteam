@@ -337,7 +337,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                         checkpoint("cleanup_completed")
                         return {"ok": True}
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
-                    code = exc.code if isinstance(exc, upstream.LoginFlowError) and exc.code in {"login_auth_failed", "login_response_incomplete"} else "login_failed"
+                    code = exc.code if isinstance(exc, upstream.LoginFlowError) and exc.code in {"login_auth_failed", "login_response_incomplete", "team_session_expired", "extra_verification"} else "login_failed"
                     result = {"success": False, "retryable": retry, "error_code": code, **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
                     if flow is not None:
