@@ -24,6 +24,15 @@ func TestConfirmedLoginFailureMessages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, a, u := executionFixture(t, 1)
 			enableRecovery(t, s, a)
+			// Exercise final messages after the configured login budget is exhausted.
+			cfg, err := s.RefundSettings(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Recovery.MaxRetries = 0
+			if err = s.SaveRefundSettings(context.Background(), a.ID, cfg); err != nil {
+				t.Fatal(err)
+			}
 			submitRequests(t, s, u, 1)
 			ctx := context.Background()
 			must := func(err error) {

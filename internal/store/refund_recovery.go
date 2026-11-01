@@ -125,6 +125,8 @@ func (d RefundDiagnostic) Sanitized() RefundDiagnostic {
 		d.Retryable = false
 	}
 	if d.Code == "extra_verification" {
+		// The protocol attempt stops at verification. Only the scheduler may
+		// restart a pre-submission login under its configured retry budget.
 		d.Retryable = false
 	}
 	if d.HTTPStatus < 100 || d.HTTPStatus > 599 {
@@ -208,12 +210,12 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 			if cfg.PlanFallback != nil && cfg.PlanFallback.Enabled {
 				nextMode, delay = "retry", cfg.PlanFallback.RetrySeconds
 			}
-		case d.Retryable && retries < cfg.MaxRetries:
+		case (d.Retryable || (d.Code == "extra_verification" && step == "login")) && retries < cfg.MaxRetries:
 			nextMode = "retry"
 			delay = j.Settings.RetrySeconds
 		case cfg.CleanupFailed && oneOf(step, "assigned", "inviting", "invited", "login", "ready") && !oneOf(d.Code, "mother_identity", "member_identity", "proxy_missing", "protocol_failed"):
-			// An explicit verification requirement is not retryable, but before
-			// submission it can safely end after confirmed scoped cleanup.
+			// End an unsubmitted attempt only after its login retry budget is
+			// exhausted, then confirm scoped cleanup before releasing its fee.
 			nextMode = "cleanup"
 			delay = cfg.CleanupIntervals[0]
 		}
