@@ -40,6 +40,9 @@ func TestExtraVerificationCleansBeforeReleaseWithoutLoginRetry(t *testing.T) {
 				if r.Status != "failed" || r.FeeStatus != "released" {
 					t.Fatal(r)
 				}
+				if strings.Contains(r.Message, "再次尝试") {
+					t.Fatal("cleanup was not confirmed", r.Message)
+				}
 				if next, err := s.ClaimRefund(ctx); err != nil || next != nil {
 					t.Fatal(next, err)
 				}

@@ -326,6 +326,14 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		message = "本次服务未完成，冻结服务费已释放。"
 		if terminalCode == "password_verification_failed" {
 			message = passwordFailedMessage
+		} else if step == "login" {
+			reason, e := confirmedLoginFailureMessage(ctx, tx, j.ID)
+			if e != nil {
+				return e
+			}
+			if reason != "" {
+				message = reason
+			}
 		}
 		if err = transitionTx(ctx, tx, j.UserID, j.ID, "failed", message); err != nil {
 			return err
