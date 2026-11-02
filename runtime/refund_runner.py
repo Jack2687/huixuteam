@@ -8,10 +8,11 @@ import sys
 import time
 import uuid
 import diagnostics
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from curl_cffi import requests
 from manager_oauth import bridge, upstream
+from manager_oauth.adapter import parse_retry_after
 from manager_oauth.merge_v2 import TeamProtocolLogin
 from workspace_observation import WorkspaceObservationMixin, observe
 
@@ -25,8 +26,9 @@ class NeedsVerification(Exception):
 
 
 class UpstreamFailure(Exception):
-    def __init__(self, code, status=0, network_code=0):
+    def __init__(self, code, status=0, network_code=0, retry_after_seconds=0):
         self.code, self.status, self.network_code = code, status, network_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 def rpc(method, params=None, **kwargs):
@@ -38,6 +40,31 @@ def rpc(method, params=None, **kwargs):
 
 
 class CustomerLogin(WorkspaceObservationMixin, TeamProtocolLogin):
+    def request(self, url, **kwargs):
+        # Classify the current login response, never an old last_status or prose.
+        # Submission uses its own transport/checkpoints and is not handled here.
+        parsed = urlsplit(url)
+        login_request = self.is_chatgpt_at() and (
+            parsed.hostname == "auth.openai.com" and parsed.path.startswith(("/api/accounts/", "/oauth/", "/authorize", "/u/", "/log-in"))
+            or parsed.hostname == "chatgpt.com" and parsed.path.startswith(("/api/auth/", "/auth/"))
+        )
+        try:
+            response = super().request(url, **kwargs)
+        except upstream.LoginFlowError as exc:
+            if login_request and exc.code == "chatgpt_rate_limited" and exc.status == 429:
+                # Stop this session; the durable scheduler applies the delay.
+                exc.retryable = True
+            raise
+        if login_request and response.status in {408, 500, 502, 503, 504}:
+            text = str(response.text or "")[:32768].lower()
+            challenge = any(marker in text for marker in ("cf-chl-", "challenge-platform", "just a moment"))
+            challenge = challenge or any(str(k).lower() == "cf-mitigated" and str(v).lower() == "challenge" for k, v in response.headers.items())
+            if not challenge:
+                error = upstream.LoginFlowError("Login service temporarily unavailable", code="login_upstream_unavailable", status=response.status, retryable=True)
+                error.retry_after_seconds = parse_retry_after(response.headers)
+                raise error
+        return response
+
     def _finish_chatgpt_login(self, continue_url):
         if self.payload.get("_skip_personal_plan_observation"):
             return super()._finish_chatgpt_login(continue_url)
@@ -123,7 +150,7 @@ class MotherClient:
             raise UpstreamFailure("mother_network", network_code=getattr(exc,"code",0)) from None
         diagnostics.request_event(operation, "response", side="mother", response=response, started=started)
         if not 200 <= response.status_code < 300:
-            raise UpstreamFailure("mother_http", response.status_code)
+            raise UpstreamFailure("mother_http", response.status_code, retry_after_seconds=parse_retry_after(response.headers))
         return response
 
     def find(self, collection):
@@ -196,7 +223,7 @@ class MotherClient:
             self.find("users")
         except UpstreamFailure as exc:
             code = "mother_preflight_auth" if exc.status == 401 else "mother_preflight_failed"
-            raise UpstreamFailure(code, exc.status, exc.network_code) from None
+            raise UpstreamFailure(code, exc.status, exc.network_code, exc.retry_after_seconds) from None
 
     def remove(self, child_id):
         self.child_id = child_id or self.child_id
@@ -348,7 +375,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                     return {"ok": False, "code": result.get("error_code") or "login_failed", "http_status": result.get("http_status", 0),
                             "evidence": result.get("evidence"),
                             **({"retryable": bool(result.get("retryable")), "network_code": result.get("network_code", 0), "duration_ms": result.get("duration_ms", 0)} if recovery else {})}
-                sleep(job["settings"]["retry_seconds"])
+                sleep(max(job["settings"]["retry_seconds"], (result.get("evidence") or {}).get("retry_after_seconds", 0)))
         if not accepted:
             return {"ok": False, "code": "export_uncertain"}
         checkpoint("removing")

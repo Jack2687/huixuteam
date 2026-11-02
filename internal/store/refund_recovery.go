@@ -223,6 +223,10 @@ func scheduleRefundRecovery(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	if nextMode == "" {
 		return autoReleaseRefund(ctx, tx, j, step, d)
 	}
+	if nextMode == "retry" && step == "login" && d.Evidence != nil && d.Evidence.Side == "child" &&
+		oneOf(d.Evidence.Reason, "chatgpt_rate_limited", "login_upstream_unavailable") && d.Evidence.RetryAfterSeconds > delay {
+		delay = d.Evidence.RetryAfterSeconds
+	}
 	if nextMode == "verify" {
 		status = "verifying"
 	}

@@ -161,7 +161,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_mother_probe_is_read_only_and_uses_dedicated_proxy(self):
         with patch.object(runner.requests,"Session") as factory:
-            response=Mock(status_code=200,json=Mock(return_value={"items":[]}))
+            response=Mock(status_code=200,headers={},json=Mock(return_value={"items":[]}))
             factory.return_value.request.return_value=response
             result=runner.probe_mother(self.job())
             self.assertTrue(result["valid"])

@@ -122,7 +122,7 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
   AND NOT ((m.id||':'||md5(m.secret)||':'||md5(p.secret))=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
   AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released AND busy.mother_released_at IS NULL)
   AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND COALESCE(done.mother_released_at,done.completed_at)>now()-($1 * interval '1 second'))
-  ORDER BY m.updated_at,m.id LIMIT 1
+  ORDER BY CASE WHEN e.recovery_mode='mother_switch' AND m.id=e.mother_id THEN 1 ELSE 0 END,m.updated_at,m.id LIMIT 1
  ) m ON true
  WHERE r.status='queued' AND NOT u.disabled
  AND (e.refund_id IS NULL OR ($2 AND e.released AND e.step='assigned' AND e.recovery_mode='mother_switch' AND e.next_attempt_at<=now()))

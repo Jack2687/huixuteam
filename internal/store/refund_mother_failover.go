@@ -47,6 +47,17 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	if cfg == nil || !cfg.Enabled || switches >= cfg.MaxSwitches {
 		return true, autoReleaseRefund(ctx, tx, j, step, d)
 	}
+	// A temporary outage must not exclude every configured mother forever.
+	// Keep the same switch budget and queue delay; prefer another free mother,
+	// but allow the original resource to be rechecked after the cooldown.
+	temporary := d.Code == "mother_preflight_failed" && (d.HTTPStatus == 408 || d.HTTPStatus == 429 ||
+		d.HTTPStatus == 500 || d.HTTPStatus == 502 || d.HTTPStatus == 503 || d.HTTPStatus == 504 ||
+		(d.HTTPStatus == 0 && (d.NetworkCode == 5 || d.NetworkCode == 6 || d.NetworkCode == 7 ||
+			d.NetworkCode == 28 || d.NetworkCode == 35 || d.NetworkCode == 52 || d.NetworkCode == 55 || d.NetworkCode == 56)))
+	delay := cfg.RetrySeconds
+	if temporary && d.Evidence != nil && d.Evidence.RetryAfterSeconds > delay {
+		delay = d.Evidence.RetryAfterSeconds
+	}
 	// This restricted transition is safe to cancel: no invite/login/submission was
 	// performed. Do not enable generic processing -> queued transitions elsewhere.
 	if _, err := tx.Exec(ctx, `UPDATE refunds SET status='queued',message=$2,updated_at=now() WHERE id=$1 AND fee_status='frozen'`, j.ID, publicRefundMessage("queued", "")); err != nil {
@@ -54,8 +65,8 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	}
 	if _, err := tx.Exec(ctx, `UPDATE refund_execution SET released=true,lease_token='',lease_until=NULL,recovery_mode='mother_switch',
  next_attempt_at=now()+($2 * interval '1 second'),mother_switch_count=mother_switch_count+1,
- failed_mothers=array_append(failed_mothers,$3),recovery_started_at=COALESCE(recovery_started_at,now()),updated_at=now()
- WHERE refund_id=$1 AND child_user_id='' AND accepted_at IS NULL`, j.ID, cfg.RetrySeconds, j.MotherAttemptKey); err != nil {
+ failed_mothers=CASE WHEN $4 THEN failed_mothers ELSE array_append(failed_mothers,$3) END,recovery_started_at=COALESCE(recovery_started_at,now()),updated_at=now()
+ WHERE refund_id=$1 AND child_user_id='' AND accepted_at IS NULL`, j.ID, delay, j.MotherAttemptKey, temporary); err != nil {
 		return true, err
 	}
 	_, err := tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'资源暂不可用，已重新排队等待调度。',true)", j.ID)
