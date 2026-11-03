@@ -181,17 +181,25 @@ class MotherClient:
                     or (has_more is False and total is not None and offset + len(items) < total)):
                 raise UpstreamFailure("mother_shape")
             fingerprint = tuple((str(row.get("email") or row.get("email_address") or ""),
-                                 str(row.get("id") or ""), str(row.get("user_id") or "")) for row in items)
+                                 str(row.get("id") or ""), str(row.get("user_id") or ""),
+                                 str(row.get("chatgpt_user_id") or "")) for row in items)
             if items and fingerprint in seen_pages:
                 raise UpstreamFailure("mother_pagination")
             seen_pages.add(fingerprint)
             for row in items:
                 email = row.get("email") or row.get("email_address")
+                row_ids = {row[k] for k in ("id", "user_id", "chatgpt_user_id")
+                           if isinstance(row.get(k), str) and row[k]}
+                id_match = collection == "users" and bool(self.child_id) and self.child_id in row_ids
+                email_match = isinstance(email, str) and bool(email) and email.casefold() == self.email
                 if not isinstance(email, str) or not email:
-                    raise UpstreamFailure("mother_shape")
-                email_match = email.casefold() == self.email
-                id_match = collection == "users" and bool(self.child_id) and self.child_id in {
-                    str(row.get(k) or "") for k in ("id", "user_id", "chatgpt_user_id")}
+                    # Accepted members can retain a verified ID but have email=null.
+                    # With a known child ID, distinct identified members are also
+                    # safe to scan past. Without that evidence, absence is unknown.
+                    if email not in (None, "") or collection != "users" or not self.child_id or not row_ids:
+                        diagnostics.record({"side": "mother", "stage": "members_read" if collection == "users" else "invites_read",
+                                            "event": "failure", "reason": "member_identity_missing"})
+                        raise UpstreamFailure("mother_shape")
                 if email_match or id_match:
                     diagnostics.membership_result(collection, "found", page, offset + len(items),
                                                   "both" if email_match and id_match else "email" if email_match else "user_id")

@@ -25,6 +25,85 @@ class SearchMissUpstream(ProxyFlow):
 
 
 class MemberCompletionTests(unittest.TestCase):
+    def test_null_email_member_is_removed_and_verified_over_real_transport(self):
+        class NullEmailUpstream(SearchMissUpstream):
+            def reply(self, *args):
+                status, data, headers = super().reply(*args)
+                if isinstance(data, dict):
+                    for row in data.get('items', []):
+                        row['email'] = None
+                return status, data, headers
+        for keep_member in (False, True):
+            with self.subTest(delete_takes_effect=not keep_member):
+                job = test_refund_runner.RunnerTests().job('accepted')
+                job['settings']['recovery'] = {'enabled': True}
+                with NullEmailUpstream(job) as upstream:
+                    upstream.members = True
+                    upstream.keep_member = keep_member
+                    events = []
+                    result = runner.execute(job, lambda method, *args: events.append(method))
+                    self.assertEqual(result['ok'], not keep_member, result)
+                    self.assertEqual(sum(method == 'DELETE' for _, method, *_ in upstream.records), 1)
+                    self.assertEqual('completed' in events, not keep_member)
+
+    def test_null_email_rows_use_only_verified_identity(self):
+        with patch.object(runner.requests, 'Session'):
+            client = runner.MotherClient(test_refund_runner.RunnerTests().job('accepted'))
+        # An unrelated anonymized member must not hide the target or prevent
+        # the subsequent full-roster absence check.
+        other = {'email': None, 'id': 'other-user', 'role': 'member'}
+        target = {'email': None, 'id': 'child-user', 'role': 'standard-user'}
+        state = {'present': True}
+        def call(method, suffix, body=None):
+            if method == 'DELETE':
+                self.assertEqual(suffix, '/users/child-user')
+                state['present'] = False
+                return Mock()
+            rows = [other] + ([target] if state['present'] else []) if suffix.startswith('/users?') else []
+            return Mock(json=Mock(return_value={'items': rows, 'total': len(rows)}))
+        client.call = Mock(side_effect=call)
+        evidence = []
+        with diagnostics.capture(lambda _, params: evidence.append(params)):
+            client.remove('child-user')
+            client.confirm_removed()
+        self.assertFalse(state['present'])
+        payload = json.dumps(evidence)
+        self.assertIn('user_id', payload)
+        self.assertNotIn('child-user', payload)
+        self.assertNotIn('other-user', payload)
+
+    def test_missing_identity_cannot_prove_absence_or_authorize_removal(self):
+        for collection, child, row in [
+            ('users', '', {'email': None, 'id': 'child-user', 'role': 'member'}),
+            ('users', 'child-user', {'email': None, 'role': 'member'}),
+            ('users', 'child-user', {'email': None, 'id': 123, 'role': 'member'}),
+            ('users', 'child-user', {'email': {'private': 'value'}, 'id': 'child-user'}),
+            ('invites', 'child-user', {'email': None, 'id': 'child-user', 'role': 'member'}),
+        ]:
+            with self.subTest(collection=collection, child=child, row=row):
+                job = test_refund_runner.RunnerTests().job('accepted')
+                job['child_user_id'] = child
+                with patch.object(runner.requests, 'Session'):
+                    client = runner.MotherClient(job)
+                client.call = Mock(return_value=Mock(json=Mock(return_value={'items': [row], 'total': 1})))
+                evidence = []
+                with diagnostics.capture(lambda _, params: evidence.append(params)), self.assertRaises(runner.UpstreamFailure) as result:
+                    client.find(collection)
+                self.assertEqual(result.exception.code, 'mother_shape')
+                self.assertIn('member_identity_missing', json.dumps(evidence))
+                self.assertNotIn('private', json.dumps(evidence))
+                self.assertEqual(client.call.call_args.args[0], 'GET')
+
+    def test_null_email_id_match_does_not_allow_removing_owner(self):
+        with patch.object(runner.requests, 'Session'):
+            client = runner.MotherClient(test_refund_runner.RunnerTests().job('accepted'))
+        client.call = Mock(return_value=Mock(json=Mock(return_value={
+            'items': [{'email': None, 'id': 'child-user', 'role': 'account-owner'}], 'total': 1})))
+        with self.assertRaises(runner.UpstreamFailure) as result:
+            client.remove('child-user')
+        self.assertEqual(result.exception.code, 'member_identity')
+        self.assertEqual(client.call.call_count, 1)
+
     def test_search_miss_cannot_skip_actual_member_removal(self):
         job = test_refund_runner.RunnerTests().job('accepted')
         job['settings']['recovery'] = {'enabled': True}

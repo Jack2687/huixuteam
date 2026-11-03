@@ -9,6 +9,35 @@ import (
 	"time"
 )
 
+func TestMissingMemberIdentityDiagnosticIsDurableAndPrivate(t *testing.T) {
+	s, _, u := executionFixture(t, 1)
+	submitRequests(t, s, u, 1)
+	ctx := context.Background()
+	j, err := s.ClaimRefund(ctx)
+	if err != nil || j == nil {
+		t.Fatal(err)
+	}
+	before, _ := s.Refund(ctx, u.ID, j.ID)
+	d := store.RefundDiagnostic{Evidence: &store.RefundEvidence{
+		Stage: "members_read", Side: "mother", Event: "failure", Reason: "member_identity_missing",
+		UpstreamCode: "private-member-id", Source: "private-email@example.invalid",
+	}}
+	if err := s.AppendRefundDiagnostics(ctx, j, []store.RefundDiagnostic{d}); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	if err := s.Pool.QueryRow(ctx, "SELECT diagnostic FROM refund_execution_diagnostics WHERE refund_id=$1", j.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "member_identity_missing") || strings.Contains(string(raw), "private-") {
+		t.Fatal("missing or unsafe membership evidence")
+	}
+	after, _ := s.Refund(ctx, u.ID, j.ID)
+	if before.Status != after.Status || before.FeeStatus != after.FeeStatus || !before.UpdatedAt.Equal(after.UpdatedAt) {
+		t.Fatal("diagnostic changed business state")
+	}
+}
+
 func TestPrivateDiagnosticsAppendAfterCompletionWithoutChangingState(t *testing.T) {
 	s, _, u := executionFixture(t, 1)
 	submitRequests(t, s, u, 1)
