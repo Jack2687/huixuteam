@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import { api, date, type Page } from '../lib/api';
 import Icon from './Icon.vue';
 import AdminBranding from './AdminBranding.vue';
+import AdminServiceSettings from './AdminServiceSettings.vue';
 import AdminCustomMenus from './AdminCustomMenus.vue';
 import type { CustomMenu, SiteBranding } from '../lib/site';
 import Pagination from './Pagination.vue';
@@ -42,6 +43,7 @@ onMounted(()=>{load();loadLogs();interval=setInterval(()=>{if(tab.value==='mail'
    <footer class="site-save"><span>仅管理员可以调整这些设置</span><button class="button primary" :disabled="busy">{{busy?'保存中…':'保存设置'}}</button></footer>
   </form>
   <AdminBranding v-if="tab==='branding'&&settings" :initial="settings.branding" @toast="emit('toast',$event)" @saved="settings.branding=$event;emit('changed')"/>
+  <AdminServiceSettings v-if="tab==='branding'&&settings" @toast="emit('toast',$event)"/>
   <AdminCustomMenus v-if="tab==='custom-menus'&&settings" :initial="settings.custom_menus" @toast="emit('toast',$event)" @saved="settings.custom_menus=$event;emit('changed')"/>
   <template v-if="tab==='mail'&&settings"><section class="site-card"><h3>验证邮件配置</h3><p class="site-description">先保存配置，再测试。连接测试不发送邮件；发送测试需要填写收件邮箱。</p><div class="site-test"><button class="button secondary" :disabled="testing||busy" @click="test(false)">测试连接</button><form @submit.prevent="test(true)"><input v-model="recipient" aria-label="测试收件邮箱" type="email" required maxlength="254" placeholder="测试收件邮箱"/><button class="button secondary" :disabled="testing||busy">发送测试邮件</button></form></div></section><section class="table-card"><div class="table-toolbar"><h3>邮件发送记录</h3><button class="button secondary" @click="loadLogs"><Icon name="RefreshCw" :size="15"/>刷新记录</button></div><p v-if="logError" class="form-error">{{logError}}</p><div class="table-scroll"><table><thead><tr><th>收件邮箱</th><th>用途</th><th>状态</th><th>尝试次数</th><th>创建 / 发送时间</th><th>说明</th></tr></thead><tbody><tr v-for="row in logs" :key="row.id"><td>{{row.recipient}}</td><td>{{{register:'注册验证码',reset:'密码重置',test:'测试邮件'}[row.purpose]||row.purpose}}</td><td>{{statusLabels[row.status]||row.status}}</td><td>{{row.attempts}}</td><td>{{date(row.created_at)}}<br/><small v-if="row.sent_at">{{date(row.sent_at)}}</small></td><td>{{reasons[row.error_code]||'—'}}</td></tr><tr v-if="!logs.length"><td colspan="6" class="empty-state">暂无发送记录</td></tr></tbody></table></div><Pagination v-model:page="page" :total="total" :size="20" :sizes="[20]" @update:page="loadLogs"/><p class="site-log-note">记录保留 30 天，不展示验证码和邮件正文。发送失败最多尝试 3 次；验证码过期后需重新获取。</p></section></template>
  </section>

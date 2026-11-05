@@ -69,7 +69,7 @@ func TestSiteEmailRegistrationAndReset(t *testing.T) {
 		t.Fatal("code replay accepted", e)
 	}
 	u, e := s.Login(ctx, email, in.Password)
-	if e != nil || u.Role != "member" || u.Balance != 0 || u.ServiceFee != 3000 {
+	if e != nil || u.Role != "member" || u.Balance != 0 || u.ServiceFee != 10000 {
 		t.Fatalf("registration privilege/default mismatch: %v", e)
 	}
 	session, e := s.NewSession(ctx, u.ID)

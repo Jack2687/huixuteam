@@ -82,7 +82,7 @@ const modal = ref(""),
   formName = ref(""),
   formRole = ref("member"),
   formPassword = ref(""),
-  formFee = ref(30),
+  formFee = ref(100),
   formDisabled = ref(false),
   creditAmount = ref(100),
   creditDirection = ref<1 | -1>(1),
@@ -225,7 +225,12 @@ onUnmounted(() => {
   abort?.abort();
   clearTimeout(searchTimer);
 });
-function open(mode: string, user?: User) {
+async function open(mode: string, user?: User) {
+  let defaultFee = 10000;
+  if (mode === "user" && !user) {
+    try { defaultFee = (await api<{default_service_fee:number}>("/api/admin/site-settings/service")).default_service_fee; }
+    catch (e) { emit("toast", (e as Error).message); return; }
+  }
   target.value = user;
   modal.value = mode;
   formError.value = "";
@@ -233,7 +238,7 @@ function open(mode: string, user?: User) {
   formName.value = user?.name || "";
   formRole.value = user?.role || "member";
   formPassword.value = "";
-  formFee.value = (user?.service_fee ?? 3000) / 100;
+  formFee.value = (user?.service_fee ?? defaultFee) / 100;
   formDisabled.value = user?.disabled || false;
   note.value = "";
   creditDirection.value = 1;

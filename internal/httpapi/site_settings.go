@@ -28,6 +28,23 @@ func enabledMenus(v store.SiteSettings) []siteMenu {
 	return out
 }
 func (s *Server) siteRoutes(m *http.ServeMux) {
+	m.Handle("GET /api/admin/site-settings/service", s.require("admin.site.manage", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.DB.SiteService(r.Context())
+		s.result(w, v, e)
+	}))
+	m.Handle("PUT /api/admin/site-settings/service", s.require("admin.site.manage", func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			DefaultServiceFee *int64 `json:"default_service_fee"`
+		}
+		if !decode(w, r, &v) {
+			return
+		}
+		if v.DefaultServiceFee == nil {
+			fail(w, 400, "请填写注册默认服务单价")
+			return
+		}
+		s.result(w, map[string]bool{"ok": true}, s.DB.SaveSiteService(r.Context(), current(r).ID, store.SiteServiceSettings{DefaultServiceFee: *v.DefaultServiceFee}))
+	}))
 	m.HandleFunc("GET /api/public/site", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.DB.SiteSettings(r.Context())
 		if e != nil {

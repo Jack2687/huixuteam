@@ -211,8 +211,12 @@ func (s *Store) Register(ctx context.Context, v RegistrationInput) error {
 			return e
 		}
 	}
-	// Default member role, zero balance and the existing default service fee.
-	tag, e := tx.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,'member') ON CONFLICT(email) DO NOTHING", ID(), v.Email, v.Name, string(hashed))
+	// Read pricing inside registration's transaction; never accept a client price.
+	var fee int64
+	if e = tx.QueryRow(ctx, "SELECT default_service_fee FROM site_service_settings WHERE id FOR SHARE").Scan(&fee); e != nil {
+		return e
+	}
+	tag, e := tx.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role,service_fee) VALUES($1,$2,$3,$4,'member',$5) ON CONFLICT(email) DO NOTHING", ID(), v.Email, v.Name, string(hashed), fee)
 	if e != nil {
 		return e
 	}

@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS users (
  id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
  password_hash TEXT NOT NULL, balance BIGINT NOT NULL DEFAULT 0 CHECK(balance >= 0),
  frozen BIGINT NOT NULL DEFAULT 0 CHECK(frozen >= 0 AND frozen <= balance),
- service_fee BIGINT NOT NULL DEFAULT 3000 CHECK(service_fee >= 0),
+ service_fee BIGINT NOT NULL DEFAULT 10000 CHECK(service_fee >= 0),
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin','operator','member'));
@@ -241,3 +241,12 @@ CREATE TABLE IF NOT EXISTS site_branding (
  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO site_branding(id) VALUES(true) ON CONFLICT DO NOTHING;
+
+-- Registration pricing only. Historical balances are never rescaled at startup.
+CREATE TABLE IF NOT EXISTS site_service_settings (
+ id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id),
+ default_service_fee BIGINT NOT NULL DEFAULT 10000 CHECK(default_service_fee BETWEEN 0 AND 10000000),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO site_service_settings(id) VALUES(true) ON CONFLICT DO NOTHING;
+ALTER TABLE users ALTER COLUMN service_fee SET DEFAULT 10000;
