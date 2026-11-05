@@ -63,14 +63,10 @@ func TestHTTPPermissionsIsolationAndKeys(t *testing.T) {
 	for _, path := range []string{"users", "codes", "audit", "redemptions", "overview", "refunds"} {
 		request("GET", "/api/admin/"+path, "", mem, "", "", 403)
 	}
-	for _, path := range []string{"users", "codes", "audit", "redemptions"} {
+	for _, path := range []string{"users", "codes", "audit", "redemptions", "overview", "refunds"} {
 		request("GET", "/api/admin/"+path, "", ops, "", "", 403)
 	}
-	overview := request("GET", "/api/admin/overview", "", ops, "", "", 200)
-	if strings.Contains(string(overview), "balance") {
-		t.Fatal("operator received user balances")
-	}
-	request("GET", "/api/admin/refunds", "", ops, "", "", 200)
+	request("GET", "/api/admin/overview", "", ad, "", "", 200)
 	request("POST", "/api/admin/codes", `{"count":1,"amount":1000,"max_uses":1}`, mem, "", "", 403)
 	request("POST", "/api/admin/codes", `{"count":1,"amount":1000,"max_uses":1}`, ad, "", "https://untrusted.invalid", 403)
 	request("POST", "/api/admin/users/"+admin.ID+"/credit", `{"amount":1000,"note":"self exploit"}`, mem, "", "", 403)
@@ -123,7 +119,7 @@ func TestHTTPPermissionsIsolationAndKeys(t *testing.T) {
 	if strings.Contains(string(detail), "private-secret") || strings.Contains(string(detail), "JBSWY3DPEHPK3PXP") {
 		t.Fatal("credentials leaked")
 	}
-	request("GET", "/api/admin/refunds/"+ids[0], "", ops, "", "", 200)
+	request("GET", "/api/admin/refunds/"+ids[0], "", ops, "", "", 403)
 	key, err := s.CreateKey(ctx, member.ID, "http-key")
 	if err != nil {
 		t.Fatal(err)

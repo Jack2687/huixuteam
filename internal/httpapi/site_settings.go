@@ -43,7 +43,7 @@ func (s *Server) siteRoutes(m *http.ServeMux) {
 			return
 		}
 		items := enabledMenus(v)
-		if current(r).Can("admin.overview.read") {
+		if current(r).Role == "admin" && current(r).Can("admin.overview.read") {
 			items = append(items, siteMenu{Key: "admin", Label: "运营控制台", Icon: "ShieldCheck"})
 		}
 		items = appendCustomMenus(items, v, current(r))

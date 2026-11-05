@@ -22,3 +22,10 @@
 .batch-fee-preview{font-size:12px}.batch-fee-preview summary{cursor:pointer;color:var(--accent)}.batch-fee-preview ul{list-style:none;margin:12px 0 0;padding:0;max-height:220px;overflow:auto}.batch-fee-preview li{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.batch-fee-preview li span{overflow-wrap:anywhere;min-width:0}.batch-fee-preview strong{white-space:nowrap;font-weight:500}
 
 .custom-menu-icon{width:18px;height:18px;object-fit:contain;flex-shrink:0}
+
+/* The console entry is supplied only by authenticated administrator navigation. */
+.topbar-console{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid #d8dfd0;border-radius:6px;background:#f7f9f3;color:#536346;font:inherit;font-size:12px;font-weight:600;white-space:nowrap;cursor:pointer;transition:background .15s,border-color .15s}
+.topbar-console:hover,.topbar-console.active{background:#e8efdf;border-color:#aebd9e;color:#35492b}
+.topbar-console:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.topbar-location{min-width:0}.topbar-location>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.topbar-actions{flex-shrink:0}

@@ -19,9 +19,6 @@ func Permissions(role string) []string {
 	if role == "admin" {
 		return append(base, "admin.site.manage", "admin.refunds.timeline", "admin.risk.manage", "admin.overview.read", "admin.reports.read", "admin.refunds.read", "admin.users.manage", "admin.credits.write", "admin.codes.manage", "admin.audit.read", "admin.refund.execute", "admin.announcements.manage")
 	}
-	if role == "operator" {
-		return append(base, "admin.overview.read", "admin.refunds.read")
-	}
 	return base
 }
 func (u User) Can(permission string) bool {

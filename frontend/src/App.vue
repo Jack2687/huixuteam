@@ -52,8 +52,9 @@ const page = ref<PageName>(route()),
   meta = computed(() => page.value.startsWith('custom:')?{label:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',eyebrow:'WORKSPACE / LINKS',title:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',subtitle:'',icon:'ExternalLink'}:pages[page.value as BuiltinPage]);
 const site=ref<PublicSite>({menus:[],registration_enabled:false,email_verification_enabled:true,email_domains:[],password_reset_enabled:false});
 const menus=ref<SiteMenu[]>([]);
-const nav=computed(()=>menus.value.filter(item=>item.key!=='help'));
-const allowed=(key:string)=>key==='unavailable'||(key==='api-docs'?site.value.menus:menus.value).some(item=>item.key===(key==='api-docs'?'developer':key));
+const nav=computed(()=>menus.value.filter(item=>item.key!=='help'&&item.key!=='admin'));
+const adminMenu=computed(()=>user.value?.role==='admin'&&user.value.permissions.includes('admin.overview.read')?menus.value.find(item=>item.key==='admin'):undefined);
+const allowed=(key:string)=>key==='admin'?!!adminMenu.value:key==='unavailable'||(key==='api-docs'?site.value.menus:menus.value).some(item=>item.key===(key==='api-docs'?'developer':key));
 function ensurePage(){
  if(!allowed(page.value)){page.value=(menus.value.find(item=>!item.open_in_new_tab)?.key||'unavailable') as PageName;location.hash=page.value}
  if(!allowed('refunds')){creating.value=false;detailID.value='';search.value='';query.value=''}
@@ -118,6 +119,7 @@ function expire() {
   detailID.value = "";
   notifications.value = [];
   menus.value=site.value.menus;
+  pages.admin.label='';pages.admin.title='';
   dashboard.value = { counts: {}, trend: [], provider_ready: false };
   loginError.value = "会话已结束，请再次登录。";
 }
@@ -130,8 +132,7 @@ async function refresh() {
       const [u, navigation] = await Promise.all([api<User>("/api/auth/me"),api<{menus:SiteMenu[]}>("/api/workspace/navigation"),loadSite()]);
       if(generation!==authGeneration)return;
       user.value=u;menus.value=navigation.menus;
-      const adminMenu=navigation.menus.find(item=>item.key==='admin');
-      pages.admin.label=adminMenu?.label||'';pages.admin.title=adminMenu?.label||'';
+      pages.admin.label=adminMenu.value?.label||'';pages.admin.title=adminMenu.value?.label||'';
       ensurePage();
       const [d,n]=await Promise.all([
         allowed('overview')?api<Dashboard>('/api/dashboard'):Promise.resolve({counts:{},trend:[],provider_ready:false}),
@@ -162,6 +163,7 @@ async function logout() {
     search.value = "";
     loginError.value = "";
     menus.value=site.value.menus;page.value="overview";location.hash="overview";
+    pages.admin.label='';pages.admin.title='';
   } catch (e) {
     notify((e as Error).message);
   }
@@ -248,7 +250,7 @@ onUnmounted(() => {
   </aside>
   <div class="main-shell"><header class="topbar">
    <div class="topbar-location"><button class="icon-button mobile-menu" aria-label="展开导航" :aria-expanded="sidebar" aria-controls="workspace-sidebar" @click="sidebar=!sidebar"><Icon name="Menu"/></button><span class="topbar-brand">回序</span><span class="topbar-divider">/</span><strong>{{meta.label}}</strong></div>
-   <div class="topbar-actions"><label v-if="allowed('refunds')" class="global-search"><Icon name="Search" :size="16"/><input ref="searchEl" v-model="search" aria-label="查找申请" placeholder="输入邮箱或编号查找" maxlength="100"/><kbd>⌘ K</kbd></label><button class="icon-button notification-button" aria-label="账户消息" :aria-expanded="showNotifications" @click="showNotifications=!showNotifications"><Icon name="Bell" :size="19"/><i v-if="unread"/></button><span class="workspace-avatar">{{initial}}</span></div>
+   <div class="topbar-actions"><label v-if="allowed('refunds')" class="global-search"><Icon name="Search" :size="16"/><input ref="searchEl" v-model="search" aria-label="查找申请" placeholder="输入邮箱或编号查找" maxlength="100"/><kbd>⌘ K</kbd></label><button v-if="adminMenu" class="topbar-console" :class="{active:page==='admin'}" :aria-label="adminMenu.label" :aria-current="page==='admin'?'page':undefined" @click="go('admin')"><Icon :name="adminMenu.icon" :size="16"/><span>{{adminMenu.label}}</span></button><button class="icon-button notification-button" aria-label="账户消息" :aria-expanded="showNotifications" @click="showNotifications=!showNotifications"><Icon name="Bell" :size="19"/><i v-if="unread"/></button><span class="workspace-avatar">{{initial}}</span></div>
    <div v-if="showNotifications" class="notification-popover"><h3>账户消息</h3><div v-if="notifications.length" class="notification-list"><article v-for="n in notifications" :key="n.id"><span v-if="!n.read_at" class="status-dot"/><p>{{n.message}}</p><small>{{date(n.created_at)}}</small></article></div><p v-else>暂无新消息，服务进展会在这里提醒你。</p><div class="notification-actions"><button v-if="allowed('refunds')" class="text-button" @click="go('refunds')">前往申请记录</button><button v-if="unread" class="text-button" @click="markRead">设为全部已读</button></div></div>
   </header>
   <main class="main-content"><div class="page-heading"><div><span class="eyebrow">{{meta.eyebrow}}</span><h1>{{meta.title}}</h1><p>{{page==='overview'?`${user.name}，欢迎回来。${meta.subtitle}`:meta.subtitle}}</p></div><div v-if="page==='overview'||page==='refunds'" class="heading-actions"><button class="button secondary" aria-label="更新申请数据" :disabled="refreshing" @click="refresh"><Icon name="RefreshCw" :class="{spin:refreshing}"/>{{refreshing?'更新中…':'更新数据'}}</button><button v-if="allowed('refunds')" class="button primary" @click="creating=true"><Icon name="Plus"/>提交申请</button></div><a v-if="page==='developer'" class="button secondary" href="/developers/reference" target="_blank" rel="noopener">打开接口手册<Icon name="ArrowUpRight"/></a></div>
@@ -257,7 +259,7 @@ onUnmounted(() => {
    <DashboardView v-if="page==='overview'&&allowed('overview')" :user="user" :data="dashboard" :allow-refunds="allowed('refunds')" :allow-billing="allowed('billing')" @create="creating=true" @billing="go('billing')"/>
    <RefundTable v-if="allowed('refunds')&&(page==='overview'||page==='refunds')" :key="page" :overview="page==='overview'" :search="query" :refresh="refreshTick" @detail="detailID=$event" @all="go('refunds')" @create="creating=true" @toast="notify"/>
    <Billing v-if="page==='billing'&&allowed('billing')" :user="user" :refresh="refreshTick" @detail="detailID=$event" @redeemed="notify($event);refresh()"/>
-   <Admin v-if="page==='admin'&&user.permissions.includes('admin.overview.read')" :user="user" @toast="notify" @changed="refresh"/>
+   <Admin v-if="page==='admin'&&adminMenu" :user="user" @toast="notify" @changed="refresh"/>
 
    <CustomMenuPage v-if="page.startsWith('custom:')&&allowed(page)" :id="page.slice(7)" :refresh="refreshTick"/>
    <Developers v-if="page==='developer'&&allowed('developer')" @toast="notify"/><Announcements v-if="page==='announcements'&&allowed('announcements')" :refresh="refreshTick"/><Help v-if="page==='help'&&allowed('help')" :allow-developer="allowed('developer')"/>

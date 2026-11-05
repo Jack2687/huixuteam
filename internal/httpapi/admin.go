@@ -8,7 +8,7 @@ import (
 
 func (s *Server) require(permission string, next http.HandlerFunc) http.Handler {
 	return s.auth(false, func(w http.ResponseWriter, r *http.Request) {
-		if !current(r).Can(permission) {
+		if (strings.HasPrefix(permission, "admin.") && current(r).Role != "admin") || !current(r).Can(permission) {
 			fail(w, 403, "没有访问此管理功能的权限")
 			return
 		}

@@ -55,7 +55,8 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 	}
 	public := call("GET", "/api/public/site", "", "", 200)
 	nav := call("GET", "/api/workspace/navigation", "", mem, 200)
-	for _, raw := range []string{public, nav} {
+	opsNav := call("GET", "/api/workspace/navigation", "", ops, 200)
+	for _, raw := range []string{public, nav, opsNav} {
 		if strings.Contains(raw, "admin") || strings.Contains(raw, "运营控制台") || strings.Contains(raw, "smtp") || strings.Contains(raw, "password_configured") {
 			t.Fatal("non-admin projection exposed admin configuration")
 		}
@@ -63,8 +64,19 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 	if !strings.Contains(call("GET", "/api/workspace/navigation", "", ad, 200), "运营控制台") {
 		t.Fatal("admin menu missing")
 	}
-	call("GET", "/workspace/admin", "", mem, 403)
-	call("GET", "/workspace/admin", "", "", 401)
+	for _, token := range []string{mem, ops} {
+		if strings.Contains(call("GET", "/api/auth/me", "", token, 200), "admin.") {
+			t.Fatal("non-admin user received admin permissions")
+		}
+	}
+	for _, path := range []string{"/workspace/admin", "/workspace/admin/", "/workspace/admin/settings"} {
+		for _, method := range []string{"GET", "HEAD"} {
+			call(method, path, "", ad, 200)
+			call(method, path, "", mem, 403)
+			call(method, path, "", ops, 403)
+			call(method, path, "", "", 401)
+		}
+	}
 	cfg, e := s.SiteSettings(ctx)
 	if e != nil {
 		t.Fatal(e)
@@ -88,6 +100,9 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 		path := "/assets/" + name
 		if strings.HasPrefix(name, "admin-") {
 			call("GET", path, "", mem, 403)
+			call("GET", path, "", ops, 403)
+			call("GET", path, "", "", 401)
+			call("GET", path, "", ad, 200)
 		}
 		if strings.HasPrefix(name, "admin-site-") {
 			adminSiteFound = true
@@ -101,6 +116,32 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 	}
 	if !adminSiteFound || !featureFound {
 		t.Fatal("build feature/admin modules before tests")
+	}
+	// Revoking an administrator role invalidates its existing session. A new
+	// session must use the reduced role for navigation, pages, APIs and assets.
+	delegated := testutil.Member(t, s, admin, "former-admin@test.invalid", "admin")
+	oldSession, e := s.NewSession(ctx, delegated.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	call("GET", "/api/admin/overview", "", oldSession, 200)
+	if e = s.AdminUpdateUser(ctx, admin.ID, delegated.ID, store.UserInput{Name: delegated.Name, Role: "operator", ServiceFee: delegated.ServiceFee}); e != nil {
+		t.Fatal(e)
+	}
+	call("GET", "/api/admin/overview", "", oldSession, 401)
+	newSession, e := s.NewSession(ctx, delegated.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(call("GET", "/api/workspace/navigation", "", newSession, 200), "运营控制台") {
+		t.Fatal("demoted user retained console navigation")
+	}
+	call("GET", "/workspace/admin", "", newSession, 403)
+	call("GET", "/api/admin/overview", "", newSession, 403)
+	for _, asset := range assets {
+		if strings.HasPrefix(asset.Name(), "admin-") {
+			call("GET", "/assets/"+asset.Name(), "", newSession, 403)
+		}
 	}
 	cfg.Features["refunds"] = true
 	raw, _ = json.Marshal(cfg.Features)

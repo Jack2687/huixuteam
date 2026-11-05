@@ -133,12 +133,13 @@ const actions: Record<string, string> = {
   "code.export": "导出兑换码",
 };
 const capabilities = [
+  ["进入运营控制台", true, false, false],
   ["风控监控、限流配置与限制解除", true, false, false],
   ["查看逐人资金与申请报表", true, false, false],
   ["编辑、发布与撤下平台公告", true, false, false],
   ["个人申请、账单和 API 密钥", true, true, true],
   ["使用兑换码获得积分", true, true, true],
-  ["查看所有用户退款申请", true, true, false],
+  ["查看所有用户退款申请", true, false, false],
   ["用户创建、停用及角色分配", true, false, false],
   ["服务费设置与积分调整", true, false, false],
   ["生成、导出、删除兑换码及使用记录", true, false, false],
@@ -564,7 +565,7 @@ function codeState(code: Code) {
     <div class="section-title">
       <div>
         <h2>角色与权限</h2>
-        <p>提供三类角色，可在账户管理中分配；访问范围由服务端校验。</p>
+        <p>仅管理员可进入运营控制台；运营人员与普通用户仅可访问本人数据，访问范围由服务端校验。</p>
       </div>
     </div>
     <div class="table-scroll">

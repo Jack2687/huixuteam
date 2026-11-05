@@ -127,7 +127,9 @@ func New(db *store.Store, secure bool) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		if path == "workspace/admin" {
+		if path == "workspace/admin" || strings.HasPrefix(path, "workspace/admin/") {
+			w.Header().Set("Cache-Control", "private, no-store")
+			w.Header().Set("Vary", "Cookie")
 			s.require("admin.overview.read", func(w http.ResponseWriter, r *http.Request) {
 				b, err := fs.ReadFile(assets, "index.html")
 				if err != nil {

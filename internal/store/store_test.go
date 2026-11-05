@@ -215,7 +215,7 @@ func TestPermissionsAccountDisableAndRoleChanges(t *testing.T) {
 		t.Fatal("session survived role change")
 	}
 	u, err = s.Authenticate(ctx, key, true)
-	if err != nil || !u.Can("admin.refunds.read") || u.Can("admin.users.manage") {
+	if err != nil || !u.Can("workspace.read") || u.Can("admin.refunds.read") || u.Can("admin.users.manage") {
 		t.Fatal("role permissions incorrect", u, err)
 	}
 	if err = s.AdminUpdateUser(ctx, a.ID, u.ID, store.UserInput{Name: u.Name, Role: "operator", ServiceFee: 5000, Disabled: true}); err != nil {

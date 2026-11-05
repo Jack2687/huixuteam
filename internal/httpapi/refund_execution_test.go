@@ -123,7 +123,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 	if err = s.AppendRefundDiagnostics(ctx, job, []store.RefundDiagnostic{{Code: "protocol_trace", HTTPStatus: 403, Evidence: &store.RefundEvidence{Stage: "csrf", Reason: "csrf_or_risk_blocked", Source: "adapter.py", Challenge: true}}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, who := range []struct{ path, cookie string }{{"/api/refunds/", member}, {"/api/admin/refunds/", ad}, {"/api/admin/refunds/", operator}} {
+	for _, who := range []struct{ path, cookie string }{{"/api/refunds/", member}, {"/api/admin/refunds/", ad}} {
 		body := request("GET", who.path+job.ID, "", who.cookie, 200)
 		for _, word := range []string{"export_and_deactivate", "merge_v2", "invited", "accepted_at", "internal_events", "execution", "secret-child-id", "停用", "团队", "登录"} {
 			if strings.Contains(string(body), word) {
@@ -132,7 +132,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		}
 	}
 	// Raw worker failures, legacy notifications and all read surfaces remain
-	// generic even for an administrator, operator or the customer's API key.
+	// generic even for an administrator or the customer's API key.
 	private := "export_and_deactivate merge_v2 private-child-password JBSWY3DPEHPK3PXP private-mother-at proxy-secret secret-child-id"
 	if err := s.RefundNeedsAttention(ctx, job, private); err != nil {
 		t.Fatal(err)
@@ -147,7 +147,6 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 	for _, who := range []struct{ path, credential string }{
 		{"/api/refunds", member}, {"/api/refunds/" + job.ID, member}, {"/api/dashboard", member}, {"/api/billing", member}, {"/api/notifications", member},
 		{"/api/admin/refunds", ad}, {"/api/admin/refunds/" + job.ID, ad}, {"/api/admin/overview", ad}, {"/api/admin/audit", ad},
-		{"/api/admin/refunds", operator}, {"/api/admin/refunds/" + job.ID, operator},
 		{"/open/v1/requests", "Bearer " + key}, {"/open/v1/requests/" + job.ID, "Bearer " + key},
 	} {
 		body := request("GET", who.path, "", who.credential, 200)
@@ -157,6 +156,8 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 			}
 		}
 	}
+	request("GET", "/api/admin/refunds", "", operator, 403)
+	request("GET", "/api/admin/refunds/"+job.ID, "", operator, 403)
 	privateTimeline := request("GET", "/api/admin/refunds/"+job.ID+"/timeline", "", ad, 200)
 	for _, word := range []string{"csrf_or_risk_blocked", "adapter.py", "protocol_trace", "observed_at", "evidence", "mother_id"} {
 		if strings.Contains(string(privateTimeline), word) {
@@ -178,9 +179,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		path := "/" + strings.TrimPrefix(file, "static/")
 		request("GET", path, "", "", 401)
 		request("GET", path, "", member, 403)
-		if strings.Contains(file, "admin-execution-") || strings.Contains(file, "admin-timeline-") {
-			request("GET", path, "", operator, 403)
-		}
+		request("GET", path, "", operator, 403)
 		request("GET", path, "", ad, 200)
 	}
 	for _, path := range []string{"/runtime/refund_runner.py", "/docs/REFUND-INTEGRATION.md", "/.env", "/internal/store/schema.sql", "/.git/config", "/.local/server.err.log", "/api/admin/logs", "/api/admin/refunds/" + job.ID + "/execution", "/api/admin/refunds/" + job.ID + "/events/internal", "/assets/index.js.map", "/assets/%2e%2e/%2e%2e/runtime/refund_runner.py", "/runtime%2fmanager_oauth%2fmerge_v2.py"} {
