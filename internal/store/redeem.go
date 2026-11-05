@@ -9,16 +9,22 @@ import (
 )
 
 type RedeemCode struct {
-	ID         string     `json:"id"`
-	Prefix     string     `json:"prefix"`
-	Amount     int64      `json:"amount"`
-	MaxUses    int        `json:"max_uses"`
-	UsedCount  int        `json:"used_count"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	Disabled   bool       `json:"disabled"`
-	Note       string     `json:"note"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Exportable bool       `json:"exportable"`
+	ID          string           `json:"id"`
+	Prefix      string           `json:"prefix"`
+	Amount      int64            `json:"amount"`
+	MaxUses     int              `json:"max_uses"`
+	UsedCount   int              `json:"used_count"`
+	ExpiresAt   *time.Time       `json:"expires_at"`
+	Disabled    bool             `json:"disabled"`
+	Note        string           `json:"note"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Exportable  bool             `json:"exportable"`
+	Redemptions []CodeRedemption `json:"redemptions"`
+}
+type CodeRedemption struct {
+	UserID    string    `json:"user_id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
 }
 type CodeInput struct {
 	Count     int        `json:"count"`
@@ -68,7 +74,15 @@ func (s *Store) Codes(ctx context.Context, page, size int) ([]RedeemCode, int, e
 	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM redeem_codes WHERE deleted_at IS NULL").Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.Pool.Query(ctx, "SELECT id,prefix,amount,max_uses,used_count,expires_at,disabled,note,created_at,code_secret IS NOT NULL FROM redeem_codes WHERE deleted_at IS NULL ORDER BY created_at DESC,id LIMIT $1 OFFSET $2", size, (page-1)*size)
+	rows, err := s.Pool.Query(ctx, `
+SELECT c.id,c.prefix,c.amount,c.max_uses,c.used_count,c.expires_at,c.disabled,c.note,c.created_at,c.code_secret IS NOT NULL,
+       COALESCE(history.items,'[]'::jsonb)
+FROM (SELECT * FROM redeem_codes WHERE deleted_at IS NULL ORDER BY created_at DESC,id LIMIT $1 OFFSET $2) c
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(jsonb_build_object('user_id',r.user_id,'email',u.email,'created_at',r.created_at) ORDER BY r.created_at,r.id) AS items
+    FROM redemptions r JOIN users u ON u.id=r.user_id WHERE r.code_id=c.id
+) history ON true
+ORDER BY c.created_at DESC,c.id`, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -76,7 +90,7 @@ func (s *Store) Codes(ctx context.Context, page, size int) ([]RedeemCode, int, e
 	out := []RedeemCode{}
 	for rows.Next() {
 		var c RedeemCode
-		if err = rows.Scan(&c.ID, &c.Prefix, &c.Amount, &c.MaxUses, &c.UsedCount, &c.ExpiresAt, &c.Disabled, &c.Note, &c.CreatedAt, &c.Exportable); err != nil {
+		if err = rows.Scan(&c.ID, &c.Prefix, &c.Amount, &c.MaxUses, &c.UsedCount, &c.ExpiresAt, &c.Disabled, &c.Note, &c.CreatedAt, &c.Exportable, &c.Redemptions); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, c)

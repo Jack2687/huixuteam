@@ -30,6 +30,7 @@ type Code = {
   note: string;
   created_at: string;
   exportable: boolean;
+  redemptions: { user_id: string; email: string; created_at: string }[];
 };
 type Audit = {
   id: number;
@@ -707,6 +708,8 @@ function codeState(code: Code) {
             <th>兑换码</th>
             <th>面额</th>
             <th>历史兑换次数</th>
+            <th>兑换账户</th>
+            <th>兑换时间</th>
             <th>有效期</th>
             <th>状态</th>
             <th>备注</th>
@@ -722,6 +725,14 @@ function codeState(code: Code) {
             </td>
             <td>{{ money(c.amount) }} 分</td>
             <td>{{ c.used_count }}</td>
+            <td>
+              <div v-for="r in c.redemptions" :key="r.user_id">{{ r.email }}</div>
+              <span v-if="!c.redemptions.length">{{ c.used_count > 0 ? "暂无兑换记录" : "—" }}</span>
+            </td>
+            <td>
+              <div v-for="r in c.redemptions" :key="r.user_id">{{ date(r.created_at) }}</div>
+              <span v-if="!c.redemptions.length">—</span>
+            </td>
             <td>{{ c.expires_at ? date(c.expires_at) : "长期有效" }}</td>
             <td>
               <span
