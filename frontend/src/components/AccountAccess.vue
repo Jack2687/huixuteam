@@ -14,7 +14,7 @@ let timer:ReturnType<typeof setInterval>|undefined;
 function switchMode(value:typeof mode.value){mode.value=value;password.value='';confirmation.value='';code.value='';error.value='';message.value='';}
 watch(()=>props.site,()=>{if(mode.value==='register'&&!props.site.registration_enabled||mode.value==='reset'&&!props.site.password_reset_enabled)switchMode('login')});
 async function sendCode(){
- if(!email.value||sending.value||seconds.value)return;
+ if(!email.value||busy.value||sending.value||seconds.value)return;
  sending.value=true;error.value='';
  try{
   const result=await api<{message:string;retry_after:number}>('/api/auth/email-code',{method:'POST',body:JSON.stringify({email:email.value,purpose:mode.value==='reset'?'reset':'register'})});
@@ -23,7 +23,10 @@ async function sendCode(){
  }catch(e){error.value=(e as Error).message}finally{sending.value=false}
 }
 async function submit(){
- if(busy.value)return;error.value='';message.value='';
+ if(busy.value||sending.value)return;error.value='';message.value='';
+ const bytes=(value:string)=>new TextEncoder().encode(value).length;
+ if(mode.value!=='login'&&(bytes(password.value)<12||bytes(password.value)>72)){error.value='密码须为 12～72 字节，中文和表情占多个字节';return}
+ if(mode.value==='register'&&(bytes(name.value.trim())<1||bytes(name.value.trim())>80)){error.value='显示名称须为 1～80 字节';return}
  if(mode.value!=='login'&&password.value!==confirmation.value){error.value='两次输入的密码不一致';return}
  busy.value=true;
  try{
@@ -42,15 +45,15 @@ onUnmounted(()=>clearInterval(timer));
  <div class="account-access"><span class="eyebrow">ACCOUNT ACCESS</span><h2>{{title}}</h2><p>{{mode==='login'?'使用你的账号进入服务台。':mode==='register'?'完成账户资料，即可开始使用回序。':'通过账户邮箱验证码设置新的登录密码。'}}</p>
   <form @submit.prevent="submit">
    <label v-if="mode==='register'">显示名称<input v-model="name" autocomplete="nickname" maxlength="80" required placeholder="如何称呼你"/></label>
-   <label>账户邮箱<input v-model="email" type="email" autocomplete="username" maxlength="254" required placeholder="name@example.com"/></label>
+   <label>账户邮箱<input v-model="email" type="email" autocomplete="username" maxlength="254" :disabled="busy||sending" required placeholder="name@example.com"/></label>
    <p v-if="mode==='register'&&site.email_domains.length" class="field-help">可注册邮箱：{{site.email_domains.join('、')}}</p>
-   <label v-if="needsCode">邮箱验证码<div class="code-row"><input v-model="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="6 位验证码"/><button type="button" class="button secondary" :disabled="sending||seconds>0||!email" @click="sendCode">{{sending?'发送中…':seconds>0?`${seconds} 秒后重发`:'获取验证码'}}</button></div></label>
-   <label>{{mode==='login'?'账户密码':'设置密码'}}<input v-model="password" type="password" :autocomplete="mode==='login'?'current-password':'new-password'" :minlength="mode==='login'?undefined:12" maxlength="72" required :placeholder="mode==='login'?'输入登录密码':'12～72 字节，建议混合字母和数字'"/></label>
-   <label v-if="mode!=='login'">确认密码<input v-model="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="72" required placeholder="再次输入密码"/></label>
+   <label v-if="needsCode">邮箱验证码<div class="code-row"><input v-model="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="6 位验证码"/><button type="button" class="button secondary" :disabled="busy||sending||seconds>0||!email" @click="sendCode">{{sending?'发送中…':seconds>0?`${seconds} 秒后重发`:'获取验证码'}}</button></div></label>
+   <label>{{mode==='login'?'账户密码':'设置密码'}}<input v-model="password" type="password" :autocomplete="mode==='login'?'current-password':'new-password'" :minlength="1" maxlength="72" required :placeholder="mode==='login'?'输入登录密码':'12～72 字节，建议混合字母和数字'"/></label>
+   <label v-if="mode!=='login'">确认密码<input v-model="confirmation" type="password" autocomplete="new-password" minlength="1" maxlength="72" required placeholder="再次输入密码"/></label>
    <p v-if="error||(mode==='login'&&sessionError)" class="form-error" role="alert">{{error||sessionError}}</p><p v-if="message" class="auth-message" role="status">{{message}}</p>
-   <button class="button primary full" :disabled="busy"><span>{{busy?'正在处理…':mode==='login'?'进入服务台':mode==='register'?'创建账户':'确认重置密码'}}</span><Icon :name="busy?'LoaderCircle':'ArrowUpRight'" :class="{spin:busy}"/></button>
+   <button class="button primary full" :disabled="busy||sending"><span>{{busy?'正在处理…':mode==='login'?'进入服务台':mode==='register'?'创建账户':'确认重置密码'}}</span><Icon :name="busy?'LoaderCircle':'ArrowUpRight'" :class="{spin:busy}"/></button>
   </form>
-  <div class="auth-links"><template v-if="mode==='login'"><button v-if="site.registration_enabled" type="button" @click="switchMode('register')">注册新账户</button><span v-else>没有账户？请联系服务人员。</span><button v-if="site.password_reset_enabled" type="button" @click="switchMode('reset')">忘记密码？</button></template><button v-else type="button" @click="switchMode('login')">返回登录</button></div>
+  <div class="auth-links"><template v-if="mode==='login'"><button v-if="site.registration_enabled" type="button" :disabled="busy||sending" @click="switchMode('register')">注册新账户</button><span v-else>没有账户？请联系服务人员。</span><button v-if="site.password_reset_enabled" type="button" :disabled="busy||sending" @click="switchMode('reset')">忘记密码？</button></template><button v-else type="button" :disabled="busy||sending" @click="switchMode('login')">返回登录</button></div>
  </div>
 </template>
 <style scoped>

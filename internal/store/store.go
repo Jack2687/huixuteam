@@ -44,6 +44,9 @@ type Store struct {
 	runtimeReady atomic.Bool
 }
 type User struct {
+	// Login proof stays server-side and is rechecked under the user lock.
+	loginHash   string
+	loginEmail  string
 	ID          string   `json:"id"`
 	Email       string   `json:"email"`
 	Name        string   `json:"name"`
@@ -273,21 +276,43 @@ func (s *Store) Login(ctx context.Context, email, password string) (User, error)
 	if err != nil || check != nil {
 		return User{}, errors.New("邮箱或密码不正确")
 	}
-	return s.User(ctx, id)
+	u, err := s.User(ctx, id)
+	if err == nil {
+		u.loginHash = hash
+		u.loginEmail = strings.ToLower(strings.TrimSpace(email))
+	}
+	return u, err
 }
+
+// NewLoginSession rejects a login whose credentials changed after verification.
+func (s *Store) NewLoginSession(ctx context.Context, user User) (string, error) {
+	if user.loginHash == "" || user.loginEmail == "" {
+		return "", ErrForbidden
+	}
+	return s.newSession(ctx, user.ID, user.loginHash, user.loginEmail)
+}
+
+// NewSession is for trusted internal callers; HTTP login must use NewLoginSession.
 func (s *Store) NewSession(ctx context.Context, uid string) (string, error) {
+	return s.newSession(ctx, uid, "", "")
+}
+
+func (s *Store) newSession(ctx context.Context, uid, verifiedHash, verifiedEmail string) (string, error) {
 	token := Token()
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback(ctx)
-	var activeID string
-	if err = tx.QueryRow(ctx, "SELECT id FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL FOR UPDATE", uid).Scan(&activeID); err != nil {
+	var hash, email string
+	if err = tx.QueryRow(ctx, "SELECT password_hash,email FROM users WHERE id=$1 AND NOT disabled AND deleted_at IS NULL FOR UPDATE", uid).Scan(&hash, &email); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", ErrForbidden
 		}
 		return "", err
+	}
+	if verifiedHash != "" && (hash != verifiedHash || email != verifiedEmail) {
+		return "", ErrForbidden
 	}
 	_, err = tx.Exec(ctx, "DELETE FROM sessions WHERE expires_at < now()")
 	if err == nil {

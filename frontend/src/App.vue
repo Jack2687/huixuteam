@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DataProtectionNotice from "./components/DataProtectionNotice.vue";
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 import Brand from "./components/Brand.vue";
 import AccountAccess from "./components/AccountAccess.vue";
@@ -237,6 +238,7 @@ onUnmounted(() => {
   </section>
   <section class="login-form"><div><AccountAccess :site="site" :session-error="loginError" @login="loggedIn"/>
    <a v-if="site.menus.some(item=>item.key==='developer')" class="login-doc-link" href="/developers/reference">浏览接口手册<Icon name="ArrowUpRight" :size="14"/></a>
+   <DataProtectionNotice v-if="page==='overview'"/>
    <Announcements v-if="site.menus.some(item=>item.key==='announcements')" login :refresh="0"/>
   </div></section>
  </div>
@@ -256,6 +258,7 @@ onUnmounted(() => {
   </header>
   <main class="main-content"><div class="page-heading"><div><span class="eyebrow">{{meta.eyebrow}}</span><h1>{{meta.title}}</h1><p>{{page==='overview'?`${user.name}，欢迎回来。${meta.subtitle}`:meta.subtitle}}</p></div><div v-if="page==='overview'||page==='refunds'" class="heading-actions"><button class="button secondary" aria-label="更新申请数据" :disabled="refreshing" @click="refresh"><Icon name="RefreshCw" :class="{spin:refreshing}"/>{{refreshing?'更新中…':'更新数据'}}</button><button v-if="allowed('refunds')" class="button primary" @click="creating=true"><Icon name="Plus"/>提交申请</button></div><a v-if="page==='developer'" class="button secondary" href="/developers/reference" target="_blank" rel="noopener">打开接口手册<Icon name="ArrowUpRight"/></a></div>
    <div v-if="loadError" class="error-banner" role="alert">{{loadError}}<button @click="refresh">再次连接</button></div>
+   <DataProtectionNotice v-if="page==='overview'"/>
    <Announcements v-if="page==='overview'&&allowed('announcements')" compact :refresh="refreshTick" @all="go('announcements')"/>
    <DashboardView v-if="page==='overview'&&allowed('overview')" :user="user" :data="dashboard" :allow-refunds="allowed('refunds')" :allow-billing="allowed('billing')" @create="creating=true" @billing="go('billing')"/>
    <RefundTable v-if="allowed('refunds')&&(page==='overview'||page==='refunds')" :key="page" :overview="page==='overview'" :search="query" :refresh="refreshTick" @detail="detailID=$event" @all="go('refunds')" @create="creating=true" @toast="notify"/>

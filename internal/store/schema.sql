@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS redemptions (
  user_id TEXT NOT NULL REFERENCES users(id), amount BIGINT NOT NULL CHECK(amount>0),
  created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE(code_id,user_id)
 );
+CREATE INDEX IF NOT EXISTS redemptions_created_id ON redemptions(created_at DESC,id DESC);
 
 CREATE TABLE IF NOT EXISTS refund_settings (
  id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id), enabled BOOLEAN NOT NULL DEFAULT false,

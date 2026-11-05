@@ -292,15 +292,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "邮箱或密码不正确")
 		return
 	}
+	token, err := s.DB.NewLoginSession(r.Context(), u)
+	if err != nil {
+		if errors.Is(err, store.ErrForbidden) {
+			meta.Kind = "login_failed"
+			fail(w, 401, "登录信息已变更，请重新登录")
+		} else {
+			s.result(w, nil, err)
+		}
+		return
+	}
 	meta.Kind = "login_success"
 	meta.Observation.UserID = u.ID
 	meta.Observation.Account = u.Email
 	if err = s.DB.ClearLoginRisk(r.Context(), email); err != nil {
-		s.result(w, nil, err)
-		return
-	}
-	token, err := s.DB.NewSession(r.Context(), u.ID)
-	if err != nil {
 		s.result(w, nil, err)
 		return
 	}

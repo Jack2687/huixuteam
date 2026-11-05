@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import DataProtectionNotice from "./DataProtectionNotice.vue";
 import { computed, defineAsyncComponent, onUnmounted, ref, watch } from "vue";
 import Icon from "./Icon.vue";
 import { requestID } from "../lib/request-id";
 import AdminAnnouncements from "./AdminAnnouncements.vue";
+import AdminRedeemUsage from "./AdminRedeemUsage.vue";
 import AdminAccountReports from "./AdminAccountReports.vue";
 import AdminRefundMonitor from "./AdminRefundMonitor.vue";
 import Modal from "./Modal.vue";
@@ -60,7 +62,7 @@ const allTabs = [
   { key: "execution", label: "服务资源与调度", permission: "admin.refund.execute" },
   { key: "announcements", label: "公告发布", permission: "admin.announcements.manage" },
   { key: "codes", label: "兑换码", permission: "admin.codes.manage" },
-  { key: "redemptions", label: "入账记录", permission: "admin.codes.manage" },
+  { key: "redemptions", label: "使用情况", permission: "admin.codes.manage" },
   { key: "audit", label: "操作留痕", permission: "admin.audit.read" },
   { key: "permissions", label: "权限说明", permission: "admin.overview.read" },
 ];
@@ -75,7 +77,6 @@ const tab = ref("overview"),
 const overview = ref<Record<string, number | boolean>>({}),
   users = ref<User[]>([]),
   codes = ref<Code[]>([]),
-  redemptions = ref<Redemption[]>([]),
   audits = ref<Audit[]>([]);
 const modal = ref(""),
   target = ref<User>(),
@@ -157,7 +158,7 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "site" || tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
+    if (tab.value === "redemptions" || tab.value === "site" || tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
     const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
@@ -176,9 +177,6 @@ async function load() {
           for (const code of codes.value) {
             if (selectedCodes.value.has(code.id)) selectedCodes.value.set(code.id, code.exportable);
           }
-          break;
-        case "redemptions":
-          redemptions.value = data.items;
           break;
         case "audit":
           audits.value = data.items;
@@ -489,7 +487,7 @@ function codeState(code: Code) {
     {{ error }}<button @click="load">重试</button>
   </div>
   <template v-if="tab === 'overview'"
-    ><div class="metric-grid">
+    ><DataProtectionNotice/><div class="metric-grid">
       <section
         v-for="metric in [
           { key: 'users', title: '账户数量' },
@@ -562,6 +560,7 @@ function codeState(code: Code) {
   >
   <AdminSiteSettings v-if="tab==='site'&&can('admin.site.manage')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
+  <AdminRedeemUsage v-else-if="tab === 'redemptions'" @back="tab='codes'"/>
   <AdminAccountReports v-else-if="tab === 'reports'" :key="user.id" :user-id="user.id"/>
   <AdminRefundMonitor v-else-if="tab === 'refunds'" :can-timeline="can('admin.refunds.timeline')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminRiskMonitor v-else-if="tab === 'risk'" @toast="emit('toast',$event)"/>
@@ -615,6 +614,7 @@ function codeState(code: Code) {
         </p>
       </div>
       <div class="heading-actions">
+        <button v-if="tab==='codes'" class="button secondary" @click="tab='redemptions'">使用情况</button>
         <button
           class="button secondary"
           :disabled="loading"
@@ -638,7 +638,7 @@ function codeState(code: Code) {
       </div>
     </div>
     <div v-if="tab === 'codes'" class="admin-toolbar">
-      <input v-model="search" type="search" maxlength="200" aria-label="搜索兑换码" placeholder="搜索兑换码前缀、备注或兑换账户邮箱…" />
+      <input v-model="search" type="search" maxlength="200" aria-label="搜索兑换码" placeholder="搜索完整兑换码、前缀、备注或账户邮箱…" />
       <button v-if="search" class="button secondary" @click="search = ''">清空搜索</button>
     </div>
     <div v-if="tab === 'codes'" class="code-batch-toolbar">
@@ -763,26 +763,7 @@ function codeState(code: Code) {
           </tr>
         </tbody>
       </table>
-      <table v-if="tab === 'redemptions'">
-        <thead>
-          <tr>
-            <th>兑换码</th>
-            <th>用户邮箱</th>
-            <th>获得积分</th>
-            <th>兑换时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in redemptions" :key="r.id">
-            <td>
-              <code>{{ r.prefix }}••••</code>
-            </td>
-            <td>{{ r.email }}</td>
-            <td class="credit-text">+{{ money(r.amount) }} 分</td>
-            <td>{{ date(r.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
+
       <table v-if="tab === 'audit'">
         <thead>
           <tr>

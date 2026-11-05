@@ -176,6 +176,12 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 		items, total, err := s.DB.Codes(r.Context(), r.URL.Query().Get("q"), p, size)
 		s.result(w, map[string]any{"items": items, "total": total}, err)
 	}))
+	m.Handle("GET /api/admin/codes/usage", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {
+		p, size := pagination(r)
+		q := r.URL.Query()
+		result, err := s.DB.RedeemUsage(r.Context(), q.Get("period"), q.Get("date"), q.Get("q"), p, size)
+		s.result(w, result, err)
+	}))
 	m.Handle("POST /api/admin/codes", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body store.CodeInput
 		if !decode(w, r, &body) {
