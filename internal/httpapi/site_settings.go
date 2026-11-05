@@ -34,7 +34,7 @@ func (s *Server) siteRoutes(m *http.ServeMux) {
 			s.result(w, nil, e)
 			return
 		}
-		respond(w, 200, map[string]any{"menus": enabledMenus(v), "registration_enabled": v.Security.RegistrationEnabled, "email_verification_enabled": v.Security.EmailVerificationEnabled, "email_domains": v.Security.EmailDomains, "password_reset_enabled": v.Mail.Ready()})
+		respond(w, 200, map[string]any{"branding": v.Branding, "menus": enabledMenus(v), "registration_enabled": v.Security.RegistrationEnabled, "email_verification_enabled": v.Security.EmailVerificationEnabled, "email_domains": v.Security.EmailDomains, "password_reset_enabled": v.Mail.Ready()})
 	})
 	m.Handle("GET /api/workspace/navigation", s.auth(false, func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.DB.SiteSettings(r.Context())

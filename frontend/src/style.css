@@ -29,3 +29,5 @@
 .topbar-console:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .topbar-location{min-width:0}.topbar-location>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .topbar-actions{flex-shrink:0}
+
+.brand img.brand-mark{object-fit:contain;border-radius:10px;flex-shrink:0}

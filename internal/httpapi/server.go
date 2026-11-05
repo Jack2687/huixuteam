@@ -79,6 +79,7 @@ func New(db *store.Store, secure bool) http.Handler {
 	s.announcementRoutes(m)
 	s.riskRoutes(m)
 	s.siteRoutes(m)
+	s.brandingRoutes(m)
 	s.customMenuRoutes(m)
 	// Unknown API routes must never return an HTML 200 response.
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })

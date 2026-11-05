@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } fr
 import Brand from "./components/Brand.vue";
 import AccountAccess from "./components/AccountAccess.vue";
 import type { PublicSite, SiteMenu } from "./lib/site";
+import { applyBranding, branding } from "./lib/branding";
 const Announcements=defineAsyncComponent(()=>import("./components/Announcements.vue"));
 import Icon from "./components/Icon.vue";
 const DashboardView=defineAsyncComponent(()=>import("./components/Dashboard.vue"));
@@ -50,7 +51,7 @@ function route(): PageName {
 }
 const page = ref<PageName>(route()),
   meta = computed(() => page.value.startsWith('custom:')?{label:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',eyebrow:'WORKSPACE / LINKS',title:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',subtitle:'',icon:'ExternalLink'}:pages[page.value as BuiltinPage]);
-const site=ref<PublicSite>({menus:[],registration_enabled:false,email_verification_enabled:true,email_domains:[],password_reset_enabled:false});
+const site=ref<PublicSite>({branding:branding.value,menus:[],registration_enabled:false,email_verification_enabled:true,email_domains:[],password_reset_enabled:false});
 const menus=ref<SiteMenu[]>([]);
 const nav=computed(()=>menus.value.filter(item=>item.key!=='help'&&item.key!=='admin'));
 const adminMenu=computed(()=>user.value?.role==='admin'&&user.value.permissions.includes('admin.overview.read')?menus.value.find(item=>item.key==='admin'):undefined);
@@ -59,7 +60,7 @@ function ensurePage(){
  if(!allowed(page.value)){page.value=(menus.value.find(item=>!item.open_in_new_tab)?.key||'unavailable') as PageName;location.hash=page.value}
  if(!allowed('refunds')){creating.value=false;detailID.value='';search.value='';query.value=''}
 }
-async function loadSite(){site.value=await api<PublicSite>('/api/public/site')}
+async function loadSite(){site.value=await api<PublicSite>('/api/public/site');applyBranding(site.value.branding)}
 const user = ref<User>(),
   booting = ref(true),
   loginError = ref(""),

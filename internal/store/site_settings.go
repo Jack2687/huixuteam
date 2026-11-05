@@ -27,6 +27,7 @@ type SiteMail struct {
 	PasswordConfigured bool   `json:"password_configured"`
 }
 type SiteSettings struct {
+	Branding    SiteBranding    `json:"branding"`
 	CustomMenus []CustomMenu    `json:"custom_menus"`
 	Features    map[string]bool `json:"features"`
 	Security    SiteSecurity    `json:"security"`
@@ -42,10 +43,12 @@ func (s *Store) SiteSettings(ctx context.Context) (SiteSettings, error) {
 	var v SiteSettings
 	var features, security, smtp, menus []byte
 	var hasPassword bool
-	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0,custom_menus FROM site_settings WHERE id").Scan(&features, &security, &smtp, &hasPassword, &menus)
+	var brandRevision string
+	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0,custom_menus,b.revision FROM site_settings s JOIN site_branding b ON b.id=s.id WHERE s.id").Scan(&features, &security, &smtp, &hasPassword, &menus, &brandRevision)
 	if err != nil {
 		return v, err
 	}
+	v.Branding = brandMetadata(brandRevision)
 	if err = json.Unmarshal(features, &v.Features); err != nil {
 		return v, err
 	}

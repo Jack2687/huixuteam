@@ -5,7 +5,7 @@ export default defineConfig({
   build: { outDir: '../webui/static', emptyOutDir: true, assetsDir: 'assets', sourcemap:false,
     rollupOptions:{output:{onlyExplicitManualChunks:true,manualChunks(id){
       const path=id.replaceAll('\\','/');
-      if(path.includes('/components/AdminSiteSettings.vue')||path.includes('/components/AdminCustomMenus.vue'))return 'admin-site';
+      if(path.includes('/components/AdminBranding.vue')||path.includes('/components/AdminSiteSettings.vue')||path.includes('/components/AdminCustomMenus.vue'))return 'admin-site';
       const features:Record<string,string[]>={overview:['Dashboard'],refunds:['RefundTable','RefundForm','RefundDetail'],billing:['Billing','Redeem'],developer:['Developers','ApiDocs'],announcements:['Announcements','AnnouncementTicker'],help:['Help']};
       for(const [name,components] of Object.entries(features)){if(components.some(component=>path.includes('/components/'+component+'.vue')))return 'feature-'+name}
       if(path.includes('/components/AdminRefundTimeline.vue'))return 'admin-timeline';
