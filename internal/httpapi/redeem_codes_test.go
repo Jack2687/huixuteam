@@ -10,6 +10,7 @@ import (
 	"llm-refund/internal/testutil"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -95,9 +96,9 @@ func TestCodeListShowsRedemptionAccounts(t *testing.T) {
 	}
 	server := httptest.NewServer(httpapi.New(s, false))
 	defer server.Close()
-	get := func(page int, session string) (*http.Response, []byte) {
+	get := func(page int, session string, query string) (*http.Response, []byte) {
 		t.Helper()
-		req, e := http.NewRequest("GET", fmt.Sprintf("%s/api/admin/codes?page=%d&size=1", server.URL, page), nil)
+		req, e := http.NewRequest("GET", fmt.Sprintf("%s/api/admin/codes?page=%d&size=1&q=%s", server.URL, page, url.QueryEscape(query)), nil)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -117,7 +118,7 @@ func TestCodeListShowsRedemptionAccounts(t *testing.T) {
 	}
 	items := map[string]store.RedeemCode{}
 	for page := 1; page <= 3; page++ {
-		res, body := get(page, adminSession)
+		res, body := get(page, adminSession, "")
 		var data struct {
 			Items []store.RedeemCode `json:"items"`
 			Total int                `json:"total"`
@@ -151,12 +152,69 @@ func TestCodeListShowsRedemptionAccounts(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		res, body := get(1, session)
+		res, body := get(1, session, u.Email)
 		if res.StatusCode != 403 || strings.Contains(string(body), u.Email) {
 			t.Fatalf("recipient information exposed to %s", user.Role)
 		}
 	}
-	if res, _ := get(1, ""); res.StatusCode != 401 {
+	if res, _ := get(1, "", u.Email); res.StatusCode != 401 {
 		t.Fatalf("anonymous status=%d", res.StatusCode)
+	}
+	if _, err = s.Pool.Exec(ctx, "UPDATE redeem_codes SET note='Summer_100% quota' WHERE id=$1", ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 1000, Note: "Summer_100% quota"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Pool.Exec(ctx, "UPDATE redeem_codes SET deleted_at=now() WHERE code_hash=$1", store.Hash(deleted[0])); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query   string
+		wantIDs []string
+	}{
+		{"  ", ids},
+		{strings.ToLower(codes[0][:14]), []string{ids[0]}},
+		{" SUMMER ", []string{ids[2]}},
+		{"%", []string{ids[2]}},
+		{"_", []string{ids[2]}},
+		{"CODE-OWNER@TEST.INVALID", ids[:2]},
+		{"@test.invalid", ids[:2]},
+		{"code-history@", []string{ids[1]}},
+		{"no-such-recipient", nil},
+		{"' OR true --", nil},
+	} {
+		t.Run("search/"+tc.query, func(t *testing.T) {
+			seen := map[string]bool{}
+			for page := 1; page <= len(tc.wantIDs)+1; page++ {
+				res, body := get(page, adminSession, tc.query)
+				var data struct {
+					Items []store.RedeemCode `json:"items"`
+					Total int                `json:"total"`
+				}
+				if res.StatusCode != 200 || json.Unmarshal(body, &data) != nil || data.Total != len(tc.wantIDs) {
+					t.Fatalf("wrong search result: %d %s", res.StatusCode, body)
+				}
+				if page > len(tc.wantIDs) {
+					if len(data.Items) != 0 {
+						t.Fatal("past last page returned results")
+					}
+					continue
+				}
+				if len(data.Items) != 1 || seen[data.Items[0].ID] {
+					t.Fatal("search returned duplicate or incorrect page")
+				}
+				seen[data.Items[0].ID] = true
+			}
+			for _, id := range tc.wantIDs {
+				if !seen[id] {
+					t.Fatal("search missed matching code")
+				}
+			}
+		})
+	}
+	if res, _ := get(1, adminSession, strings.Repeat("x", 201)); res.StatusCode != 400 {
+		t.Fatalf("oversized query status=%d", res.StatusCode)
 	}
 }

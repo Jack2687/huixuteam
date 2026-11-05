@@ -202,10 +202,11 @@ watch(tab, () => {
 watch(() => [page.value, size.value], load);
 watch(search, () => {
   selectedUsers.value.clear();
+  selectedCodes.value.clear();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    page.value = 1;
-    load();
+    if (page.value === 1) load();
+    else page.value = 1;
   }, 250);
 });
 watch(
@@ -635,6 +636,10 @@ function codeState(code: Code) {
           <Icon name="Plus" />生成兑换码
         </button>
       </div>
+    </div>
+    <div v-if="tab === 'codes'" class="admin-toolbar">
+      <input v-model="search" type="search" maxlength="200" aria-label="搜索兑换码" placeholder="搜索兑换码前缀、备注或兑换账户邮箱…" />
+      <button v-if="search" class="button secondary" @click="search = ''">清空搜索</button>
     </div>
     <div v-if="tab === 'codes'" class="code-batch-toolbar">
       <span>已选 {{ selectedCodes.size }} 个<span class="muted">（可跨页选择）</span></span>

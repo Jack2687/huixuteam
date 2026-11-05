@@ -173,7 +173,7 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 	}))
 	m.Handle("GET /api/admin/codes", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {
 		p, size := pagination(r)
-		items, total, err := s.DB.Codes(r.Context(), p, size)
+		items, total, err := s.DB.Codes(r.Context(), r.URL.Query().Get("q"), p, size)
 		s.result(w, map[string]any{"items": items, "total": total}, err)
 	}))
 	m.Handle("POST /api/admin/codes", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {

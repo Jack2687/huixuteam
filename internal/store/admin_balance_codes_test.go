@@ -118,7 +118,7 @@ func TestCodeExportDeletionAndHistory(t *testing.T) {
 			t.Fatal("full code not encrypted")
 		}
 	}
-	listed, total, err := s.Codes(ctx, 1, 100)
+	listed, total, err := s.Codes(ctx, "", 1, 100)
 	if err != nil || total != 3 {
 		t.Fatal(total, err)
 	}
@@ -157,7 +157,7 @@ func TestCodeExportDeletionAndHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, total, err = s.Codes(ctx, 1, 100)
+	_, total, err = s.Codes(ctx, "", 1, 100)
 	if err != nil || total != 1 {
 		t.Fatal("deleted codes still visible", total, err)
 	}
@@ -184,7 +184,7 @@ func TestCodeExportDeletionAndHistory(t *testing.T) {
 	if _, err = s.ExportCodes(ctx, a.ID, ids[2:]); !errors.Is(err, store.ErrInvalid) {
 		t.Fatal("hash-only legacy code fabricated", err)
 	}
-	listed, _, _ = s.Codes(ctx, 1, 100)
+	listed, _, _ = s.Codes(ctx, "", 1, 100)
 	if listed[0].Exportable {
 		t.Fatal("legacy code marked exportable")
 	}

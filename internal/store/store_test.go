@@ -148,7 +148,7 @@ func TestConcurrentRedeemAndLimits(t *testing.T) {
 	if sum != 12345 {
 		t.Fatal("wrong redeemed total", sum)
 	}
-	list, _, err := s.Codes(ctx, 1, 20)
+	list, _, err := s.Codes(ctx, "", 1, 20)
 	if err != nil || list[0].UsedCount != 1 {
 		t.Fatal("wrong use count", err)
 	}

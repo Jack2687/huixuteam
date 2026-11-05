@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type RedeemCode struct {
@@ -69,20 +70,29 @@ func (s *Store) GenerateCodes(ctx context.Context, actor string, in CodeInput) (
 	}
 	return codes, tx.Commit(ctx)
 }
-func (s *Store) Codes(ctx context.Context, page, size int) ([]RedeemCode, int, error) {
+func (s *Store) Codes(ctx context.Context, query string, page, size int) ([]RedeemCode, int, error) {
+	query = strings.TrimSpace(query)
+	if utf8.RuneCountInString(query) > 200 {
+		return nil, 0, invalid("搜索内容不能超过 200 个字符")
+	}
+	// Filter before pagination; EXISTS preserves one row per code even for legacy multiple redemptions.
+	const filter = `c.deleted_at IS NULL AND ($1='' OR
+    strpos(lower(c.prefix),lower($1))>0 OR strpos(lower(c.note),lower($1))>0 OR
+    EXISTS (SELECT 1 FROM redemptions r JOIN users u ON u.id=r.user_id
+            WHERE r.code_id=c.id AND strpos(lower(u.email),lower($1))>0))`
 	var total int
-	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM redeem_codes WHERE deleted_at IS NULL").Scan(&total); err != nil {
+	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM redeem_codes c WHERE "+filter, query).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.Pool.Query(ctx, `
 SELECT c.id,c.prefix,c.amount,c.max_uses,c.used_count,c.expires_at,c.disabled,c.note,c.created_at,c.code_secret IS NOT NULL,
        COALESCE(history.items,'[]'::jsonb)
-FROM (SELECT * FROM redeem_codes WHERE deleted_at IS NULL ORDER BY created_at DESC,id LIMIT $1 OFFSET $2) c
+FROM (SELECT c.* FROM redeem_codes c WHERE `+filter+` ORDER BY c.created_at DESC,c.id LIMIT $2 OFFSET $3) c
 LEFT JOIN LATERAL (
     SELECT jsonb_agg(jsonb_build_object('user_id',r.user_id,'email',u.email,'created_at',r.created_at) ORDER BY r.created_at,r.id) AS items
     FROM redemptions r JOIN users u ON u.id=r.user_id WHERE r.code_id=c.id
 ) history ON true
-ORDER BY c.created_at DESC,c.id`, size, (page-1)*size)
+ORDER BY c.created_at DESC,c.id`, query, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}
