@@ -104,7 +104,7 @@ func TestCodeExportDeletionAndHistory(t *testing.T) {
 	a := testutil.Admin(t, s)
 	u := testutil.Member(t, s, a, "code-management@test.invalid", "member")
 	ctx := context.Background()
-	codes, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 3, Amount: 1000, MaxUses: 2})
+	codes, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 3, Amount: 1000, MaxUses: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -158,6 +158,9 @@ ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS failed_mothers TEXT[] NOT 
 
 ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS code_secret BYTEA;
 ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+-- Unused legacy codes become single-use. Preserve actual counts and ceilings of
+-- consumed historical codes; Redeem refuses any code whose used_count is nonzero.
+UPDATE redeem_codes SET max_uses=1 WHERE used_count=0 AND max_uses<>1;
 
 ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS check_json JSONB;
 ALTER TABLE refund_proxies ADD COLUMN IF NOT EXISTS check_json JSONB;

@@ -186,12 +186,16 @@ func (s *Server) adminRoutes(m *http.ServeMux) {
 	}))
 	m.Handle("PATCH /api/admin/codes/{id}", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Disabled bool `json:"disabled"`
+			Disabled *bool `json:"disabled"`
 		}
 		if !decode(w, r, &body) {
 			return
 		}
-		s.result(w, map[string]bool{"ok": true}, s.DB.DisableCode(r.Context(), current(r).ID, r.PathValue("id"), body.Disabled))
+		if body.Disabled == nil {
+			fail(w, http.StatusBadRequest, "请明确指定启用或停用状态")
+			return
+		}
+		s.result(w, map[string]bool{"ok": true}, s.DB.DisableCode(r.Context(), current(r).ID, r.PathValue("id"), *body.Disabled))
 	}))
 	m.Handle("POST /api/admin/codes/export", s.require("admin.codes.manage", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {

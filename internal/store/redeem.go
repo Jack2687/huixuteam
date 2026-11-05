@@ -29,9 +29,10 @@ type CodeInput struct {
 }
 
 func (s *Store) GenerateCodes(ctx context.Context, actor string, in CodeInput) ([]string, error) {
-	if in.Count < 1 || in.Count > 100 || in.Amount < 1 || in.Amount > 100000000 || in.MaxUses < 1 || in.MaxUses > 10000 || len(in.Note) > 200 {
-		return nil, invalid("批量数量 1～100，积分大于 0 且不超过 1,000,000，使用次数 1～10000，备注不超过 200 字节")
+	if in.Count < 1 || in.Count > 100 || in.Amount < 1 || in.Amount > 100000000 || (in.MaxUses != 0 && in.MaxUses != 1) || len(in.Note) > 200 {
+		return nil, invalid("批量数量 1～100，积分大于 0 且不超过 1,000,000，每个兑换码只能使用一次，备注不超过 200 字节")
 	}
+	in.MaxUses = 1
 	if in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now()) {
 		return nil, invalid("有效期必须晚于当前时间")
 	}
@@ -91,6 +92,15 @@ func (s *Store) DisableCode(ctx context.Context, actor, id string, disabled bool
 	if err = adminLock(ctx, tx, actor); err != nil {
 		return err
 	}
+	var used int
+	if err = tx.QueryRow(ctx, "SELECT used_count FROM redeem_codes WHERE id=$1 AND deleted_at IS NULL FOR UPDATE", id).Scan(&used); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if !disabled && used > 0 {
+		return invalid("兑换码已经兑换，不能恢复使用")
+	}
 	tag, err := tx.Exec(ctx, "UPDATE redeem_codes SET disabled=$2 WHERE id=$1 AND deleted_at IS NULL", id, disabled)
 	if err != nil {
 		return err
@@ -119,10 +129,10 @@ func (s *Store) Redeem(ctx context.Context, uid, code string) (int64, error) {
 	}
 	var id, prefix string
 	var amount int64
-	var max, used int
+	var used int
 	var expiry *time.Time
 	var disabled bool
-	err = tx.QueryRow(ctx, "SELECT id,prefix,amount,max_uses,used_count,expires_at,disabled FROM redeem_codes WHERE code_hash=$1 AND deleted_at IS NULL FOR UPDATE", Hash(code)).Scan(&id, &prefix, &amount, &max, &used, &expiry, &disabled)
+	err = tx.QueryRow(ctx, "SELECT id,prefix,amount,used_count,expires_at,disabled FROM redeem_codes WHERE code_hash=$1 AND deleted_at IS NULL FOR UPDATE", Hash(code)).Scan(&id, &prefix, &amount, &used, &expiry, &disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, invalid("兑换码不存在或不可用")
 	}
@@ -136,14 +146,18 @@ func (s *Store) Redeem(ctx context.Context, uid, code string) (int64, error) {
 	if redeemed {
 		return 0, invalid("你已使用过此兑换码，请勿重复兑换")
 	}
-	if disabled || used >= max || (expiry != nil && !expiry.After(time.Now())) {
+	if disabled || used > 0 || (expiry != nil && !expiry.After(time.Now())) {
 		return 0, invalid("兑换码已停用、过期或使用完毕")
 	}
 	if _, err = tx.Exec(ctx, "UPDATE users SET balance=balance+$2 WHERE id=$1", uid, amount); err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(ctx, "UPDATE redeem_codes SET used_count=used_count+1 WHERE id=$1", id); err != nil {
+	tag, err := tx.Exec(ctx, "UPDATE redeem_codes SET used_count=1 WHERE id=$1 AND used_count=0", id)
+	if err != nil {
 		return 0, err
+	}
+	if tag.RowsAffected() != 1 {
+		return 0, invalid("兑换码已使用")
 	}
 	if _, err = tx.Exec(ctx, "INSERT INTO redemptions(code_id,user_id,amount) VALUES($1,$2,$3)", id, uid, amount); err != nil {
 		return 0, err

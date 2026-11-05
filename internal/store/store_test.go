@@ -152,7 +152,7 @@ func TestConcurrentRedeemAndLimits(t *testing.T) {
 	if err != nil || list[0].UsedCount != 1 {
 		t.Fatal("wrong use count", err)
 	}
-	multi, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 1000, MaxUses: 2})
+	multi, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,11 +162,11 @@ func TestConcurrentRedeemAndLimits(t *testing.T) {
 	if _, err = s.Redeem(ctx, users[0].ID, multi[0]); err == nil {
 		t.Fatal("same user redeemed twice")
 	}
-	if _, err = s.Redeem(ctx, users[1].ID, multi[0]); err != nil {
-		t.Fatal(err)
+	if _, err = s.Redeem(ctx, users[1].ID, multi[0]); err == nil {
+		t.Fatal("another user redeemed an already used code")
 	}
 	expires := time.Now().Add(time.Hour)
-	blocked, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 100, MaxUses: 2, ExpiresAt: &expires})
+	blocked, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 100, MaxUses: 1, ExpiresAt: &expires})
 	if err != nil {
 		t.Fatal(err)
 	}

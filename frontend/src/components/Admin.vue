@@ -89,7 +89,6 @@ const modal = ref(""),
   note = ref(""),
   codeCount = ref(1),
   codeAmount = ref(100),
-  codeUses = ref(1),
   codeExpiry = ref(""),
   generated = ref<string[]>([]),
   busy = ref(false),
@@ -308,7 +307,6 @@ async function save() {
         body: JSON.stringify({
           count: Number(codeCount.value),
           amount: Math.round(Number(codeAmount.value) * 100),
-          max_uses: Number(codeUses.value),
           expires_at: codeExpiry.value
             ? new Date(codeExpiry.value).toISOString()
             : null,
@@ -461,10 +459,10 @@ async function deleteSelectedCodes() {
   finally { busy.value = false; }
 }
 function codeState(code: Code) {
-  return code.disabled
-    ? "已停用"
-    : code.used_count >= code.max_uses
-      ? "已用完"
+  return code.used_count > 0
+    ? "已兑换"
+    : code.disabled
+      ? "已停用"
       : code.expires_at && new Date(code.expires_at).getTime() <= Date.now()
         ? "已过期"
         : "可兑换";
@@ -548,7 +546,7 @@ function codeState(code: Code) {
         <span>02</span>
         <section>
           <h4>准备积分兑换码</h4>
-          <p>设置面额、使用次数和截止时间，成员即可在资金页面兑换。</p>
+          <p>设置面额、数量和截止时间，每个码全站只能兑换一次。</p>
         </section>
       </div>
       <div>
@@ -708,7 +706,7 @@ function codeState(code: Code) {
             <th class="selection-cell"><input type="checkbox" aria-label="选择本页兑换码" :checked="allPageSelected" :indeterminate="somePageSelected && !allPageSelected" :disabled="busy || !codes.length" @change="selectPage(($event.target as HTMLInputElement).checked)" /></th>
             <th>兑换码</th>
             <th>面额</th>
-            <th>已用 / 上限</th>
+            <th>历史兑换次数</th>
             <th>有效期</th>
             <th>状态</th>
             <th>备注</th>
@@ -723,7 +721,7 @@ function codeState(code: Code) {
               <small v-if="!c.exportable" class="legacy-code-note">历史码不可导出</small>
             </td>
             <td>{{ money(c.amount) }} 分</td>
-            <td>{{ c.used_count }} / {{ c.max_uses }}</td>
+            <td>{{ c.used_count }}</td>
             <td>{{ c.expires_at ? date(c.expires_at) : "长期有效" }}</td>
             <td>
               <span
@@ -737,12 +735,13 @@ function codeState(code: Code) {
               <button
                 class="text-button"
                 :class="{ danger: !c.disabled }"
+                :disabled="busy || c.used_count > 0"
                 @click="
                   confirmCode = c;
                   formError = '';
                 "
               >
-                {{ c.disabled ? "启用" : "停用" }}
+                {{ c.used_count > 0 ? "已兑换" : c.disabled ? "启用" : "停用" }}
               </button>
             </td>
           </tr>
@@ -940,14 +939,6 @@ function codeState(code: Code) {
                 step="1"
                 required /></label
             ><label
-              >每个码使用次数<input
-                v-model="codeUses"
-                type="number"
-                min="1"
-                max="10000"
-                step="1"
-                required /></label
-            ><label
               >有效期（留空为长期）<input
                 v-model="codeExpiry"
                 type="datetime-local" /></label
@@ -959,7 +950,7 @@ function codeState(code: Code) {
             /></label>
           </div>
           <div class="notice">
-            每个账号对同一码只能兑换一次。生成后可复制或导出，也可在列表中勾选后再次导出 TXT。
+            每个兑换码全站只能成功兑换一次，任何账号使用后都不能再次兑换。生成后可复制或导出，也可在列表中勾选后再次导出 TXT。
           </div></template
         >
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
@@ -1004,7 +995,7 @@ function codeState(code: Code) {
       <p>
         {{
           confirmCode.disabled
-            ? "启用后，未过期且未用完的兑换码可继续使用。"
+            ? "启用后，未过期且从未兑换的码可以使用一次。"
             : "停用后，该兑换码将无法继续兑换。已有兑换与积分记录会保留。"
         }}
       </p>

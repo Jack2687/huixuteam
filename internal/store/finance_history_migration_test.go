@@ -45,7 +45,7 @@ func TestHistoricalFinanceRescaleAndFutureOperations(t *testing.T) {
 	}
 	must(s.AdminCredit(ctx, a.ID, u.ID, "fund-history", 20001, "fixture"))
 	must(s.AdminCredit(ctx, a.ID, u.ID, "debit-history", -101, "fixture"))
-	codes, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 1, Amount: 123, MaxUses: 2})
+	codes, err := s.GenerateCodes(ctx, a.ID, store.CodeInput{Count: 2, Amount: 123, MaxUses: 1})
 	must(err)
 	_, err = s.Redeem(ctx, u.ID, codes[0])
 	must(err)
@@ -89,7 +89,7 @@ func TestHistoricalFinanceRescaleAndFutureOperations(t *testing.T) {
 	if current.Frozen != 0 || current.Balance != after.Balance-30000 {
 		t.Fatal("queued release/settlement incorrect", current)
 	}
-	amount, err := s.Redeem(ctx, other.ID, codes[0])
+	amount, err := s.Redeem(ctx, other.ID, codes[1])
 	must(err)
 	if amount != 1230 {
 		t.Fatal("old code amount not scaled", amount)

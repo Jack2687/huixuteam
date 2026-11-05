@@ -54,6 +54,6 @@ async function redeem() {
     <p v-if="success" class="redeem-success" role="status">
       <Icon name="Check" :size="15" />{{ success }}
     </p>
-    <small>每个账户对同一码限用一次，兑换成功后可查阅收支记录。</small>
+    <small>每个兑换码全站限用一次，兑换成功后可查阅收支记录。</small>
   </section>
 </template>
