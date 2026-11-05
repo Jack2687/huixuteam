@@ -27,9 +27,10 @@ type SiteMail struct {
 	PasswordConfigured bool   `json:"password_configured"`
 }
 type SiteSettings struct {
-	Features map[string]bool `json:"features"`
-	Security SiteSecurity    `json:"security"`
-	Mail     SiteMail        `json:"mail"`
+	CustomMenus []CustomMenu    `json:"custom_menus"`
+	Features    map[string]bool `json:"features"`
+	Security    SiteSecurity    `json:"security"`
+	Mail        SiteMail        `json:"mail"`
 }
 type MailInput struct {
 	SiteMail
@@ -39,9 +40,9 @@ type MailInput struct {
 
 func (s *Store) SiteSettings(ctx context.Context) (SiteSettings, error) {
 	var v SiteSettings
-	var features, security, smtp []byte
+	var features, security, smtp, menus []byte
 	var hasPassword bool
-	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0 FROM site_settings WHERE id").Scan(&features, &security, &smtp, &hasPassword)
+	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0,custom_menus FROM site_settings WHERE id").Scan(&features, &security, &smtp, &hasPassword, &menus)
 	if err != nil {
 		return v, err
 	}
@@ -55,6 +56,12 @@ func (s *Store) SiteSettings(ctx context.Context) (SiteSettings, error) {
 		return v, err
 	}
 	v.Mail.PasswordConfigured = hasPassword
+	if err = json.Unmarshal(menus, &v.CustomMenus); err != nil {
+		return v, err
+	}
+	if v.CustomMenus == nil {
+		v.CustomMenus = []CustomMenu{}
+	}
 	if v.Security.EmailDomains == nil {
 		v.Security.EmailDomains = []string{}
 	}

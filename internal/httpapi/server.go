@@ -79,6 +79,7 @@ func New(db *store.Store, secure bool) http.Handler {
 	s.announcementRoutes(m)
 	s.riskRoutes(m)
 	s.siteRoutes(m)
+	s.customMenuRoutes(m)
 	// Unknown API routes must never return an HTML 200 response.
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
 	m.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
@@ -122,7 +123,7 @@ func New(db *store.Store, secure bool) http.Handler {
 			files.ServeHTTP(w, r)
 			return
 		}
-		if path != "developers/reference" && !strings.HasPrefix(path, "workspace/") {
+		if strings.HasPrefix(path, "workspace/custom/") || (path != "developers/reference" && !strings.HasPrefix(path, "workspace/")) {
 			http.NotFound(w, r)
 			return
 		}
@@ -150,7 +151,7 @@ func New(db *store.Store, secure bool) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src https: http:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" && !strings.HasPrefix(r.URL.Path, "/open/v1/") {
 			if origin := r.Header.Get("Origin"); origin != "" {

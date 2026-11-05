@@ -9,12 +9,14 @@ import (
 )
 
 type siteMenu struct {
-	Key   string `json:"key"`
-	Label string `json:"label"`
-	Icon  string `json:"icon"`
+	Key          string `json:"key"`
+	Label        string `json:"label"`
+	Icon         string `json:"icon"`
+	IconURL      string `json:"icon_url,omitempty"`
+	OpenInNewTab bool   `json:"open_in_new_tab,omitempty"`
 }
 
-var customerMenus = []siteMenu{{"overview", "总览", "LayoutDashboard"}, {"refunds", "申请记录", "FileText"}, {"billing", "资金与账单", "Wallet"}, {"developer", "接口接入", "CodeXml"}, {"announcements", "公告中心", "Bell"}, {"help", "使用指南", "CircleHelp"}}
+var customerMenus = []siteMenu{{Key: "overview", Label: "总览", Icon: "LayoutDashboard"}, {Key: "refunds", Label: "申请记录", Icon: "FileText"}, {Key: "billing", Label: "资金与账单", Icon: "Wallet"}, {Key: "developer", Label: "接口接入", Icon: "CodeXml"}, {Key: "announcements", Label: "公告中心", Icon: "Bell"}, {Key: "help", Label: "使用指南", Icon: "CircleHelp"}}
 
 func enabledMenus(v store.SiteSettings) []siteMenu {
 	out := []siteMenu{}
@@ -42,8 +44,9 @@ func (s *Server) siteRoutes(m *http.ServeMux) {
 		}
 		items := enabledMenus(v)
 		if current(r).Can("admin.overview.read") {
-			items = append(items, siteMenu{"admin", "运营控制台", "ShieldCheck"})
+			items = append(items, siteMenu{Key: "admin", Label: "运营控制台", Icon: "ShieldCheck"})
 		}
+		items = appendCustomMenus(items, v, current(r))
 		respond(w, 200, map[string]any{"menus": items})
 	}))
 	m.Handle("GET /api/admin/site-settings", s.require("admin.site.manage", func(w http.ResponseWriter, r *http.Request) {

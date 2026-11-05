@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS site_settings (
  mail_password BYTEA NOT NULL DEFAULT ''::bytea, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 INSERT INTO site_settings(id) VALUES(true) ON CONFLICT DO NOTHING;
+ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS custom_menus JSONB NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS auth_email_challenges (
  email TEXT NOT NULL, purpose TEXT NOT NULL CHECK(purpose IN ('register','reset')),
  id TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, user_id TEXT NOT NULL DEFAULT '', credential_hash TEXT NOT NULL DEFAULT '',

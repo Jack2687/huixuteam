@@ -14,6 +14,7 @@ const Developers=defineAsyncComponent(()=>import("./components/Developers.vue"))
 const Help=defineAsyncComponent(()=>import("./components/Help.vue"));
 const ApiDocs=defineAsyncComponent(()=>import("./components/ApiDocs.vue"));
 const Admin=defineAsyncComponent(()=>import("./components/Admin.vue"));
+const CustomMenuPage=defineAsyncComponent(()=>import("./components/CustomMenuPage.vue"));
 import {
   api,
   date,
@@ -21,8 +22,9 @@ import {
   type Dashboard,
   type Notification,
 } from "./lib/api";
-type PageName = 'overview' | 'refunds' | 'billing' | 'developer' | 'announcements' | 'help' | 'api-docs' | 'admin' | 'unavailable';
-const pages: Record<PageName,{label:string;eyebrow:string;title:string;subtitle:string;icon:string}> = {
+type BuiltinPage = 'overview' | 'refunds' | 'billing' | 'developer' | 'announcements' | 'help' | 'api-docs' | 'admin' | 'unavailable';
+type PageName = BuiltinPage | `custom:${string}`;
+const pages: Record<BuiltinPage,{label:string;eyebrow:string;title:string;subtitle:string;icon:string}> = {
  overview:{label:'总览',eyebrow:'01 / OVERVIEW',title:'服务总览',subtitle:'掌握申请进展，安排下一步工作。',icon:'LayoutDashboard'},
  refunds:{label:'申请记录',eyebrow:'02 / REQUESTS',title:'申请记录',subtitle:'从受理到完成，集中查阅每一笔服务记录。',icon:'FileText'},
  billing:{label:'资金与账单',eyebrow:'03 / BALANCE',title:'资金与账单',subtitle:'可用、预留与支出，每一笔变动均可追溯。',icon:'Wallet'},
@@ -34,7 +36,10 @@ const pages: Record<PageName,{label:string;eyebrow:string;title:string;subtitle:
  unavailable:{label:'服务台',eyebrow:'WORKSPACE',title:'暂无可用功能',subtitle:'如需帮助，请联系服务人员。',icon:'CircleHelp'},
 };
 function route(): PageName {
+  const customPath=location.pathname.match(/^\/workspace\/custom\/([a-zA-Z0-9_-]+)$/);
+  if(!location.hash&&customPath)return `custom:${customPath[1]}`;
   const value = location.hash.slice(1) || (location.pathname.startsWith("/workspace/") ? location.pathname.split("/")[2] : "");
+  if(/^custom:[a-zA-Z0-9_-]+$/.test(value))return value as PageName;
   return (
     value in pages
       ? value
@@ -44,13 +49,13 @@ function route(): PageName {
   ) as PageName;
 }
 const page = ref<PageName>(route()),
-  meta = computed(() => pages[page.value]);
+  meta = computed(() => page.value.startsWith('custom:')?{label:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',eyebrow:'WORKSPACE / LINKS',title:menus.value.find(item=>item.key===page.value)?.label||'自定义页面',subtitle:'',icon:'ExternalLink'}:pages[page.value as BuiltinPage]);
 const site=ref<PublicSite>({menus:[],registration_enabled:false,email_verification_enabled:true,email_domains:[],password_reset_enabled:false});
 const menus=ref<SiteMenu[]>([]);
 const nav=computed(()=>menus.value.filter(item=>item.key!=='help'));
 const allowed=(key:string)=>key==='unavailable'||(key==='api-docs'?site.value.menus:menus.value).some(item=>item.key===(key==='api-docs'?'developer':key));
 function ensurePage(){
- if(!allowed(page.value)){page.value=(menus.value[0]?.key||'unavailable') as PageName;location.hash=page.value}
+ if(!allowed(page.value)){page.value=(menus.value.find(item=>!item.open_in_new_tab)?.key||'unavailable') as PageName;location.hash=page.value}
  if(!allowed('refunds')){creating.value=false;detailID.value='';search.value='';query.value=''}
 }
 async function loadSite(){site.value=await api<PublicSite>('/api/public/site')}
@@ -236,7 +241,7 @@ onUnmounted(() => {
   <div v-if="sidebar" class="sidebar-scrim" @click="sidebar=false"/>
   <aside id="workspace-sidebar" class="sidebar" :class="{'is-open':sidebar}" aria-label="回序导航">
    <div class="sidebar-brand-row"><Brand/><button class="icon-button sidebar-close" aria-label="收起导航" @click="sidebar=false"><Icon name="X"/></button></div>
-   <div class="sidebar-scroll"><span class="nav-label">服务台 / WORKSPACE</span><nav aria-label="服务导航"><button v-for="item in nav" :key="item.key" :aria-label="item.label" :class="{active:page===item.key}" :aria-current="page===item.key?'page':undefined" @click="go(item.key as PageName)"><Icon :name="item.icon"/><span>{{item.label}}</span><Icon v-if="page===item.key" name="ChevronRight" :size="14"/></button></nav>
+   <div class="sidebar-scroll"><span class="nav-label">服务台 / WORKSPACE</span><nav aria-label="服务导航"><template v-for="item in nav" :key="item.key"><a v-if="item.key.startsWith('custom:')&&item.open_in_new_tab" class="custom-menu-link" :aria-label="item.label" :href="`/workspace/custom/${item.key.slice(7)}/open`" target="_blank" rel="noopener noreferrer"><img v-if="item.icon_url" class="custom-menu-icon" :src="item.icon_url" alt=""/><Icon v-else :name="item.icon"/><span>{{item.label}}</span><Icon name="ArrowUpRight" :size="14"/></a><button v-else :aria-label="item.label" :class="{active:page===item.key}" :aria-current="page===item.key?'page':undefined" @click="go(item.key as PageName)"><img v-if="item.icon_url" class="custom-menu-icon" :src="item.icon_url" alt=""/><Icon v-else :name="item.icon"/><span>{{item.label}}</span><Icon v-if="page===item.key" name="ChevronRight" :size="14"/></button></template></nav>
     <div v-if="allowed('developer')" class="sidebar-tip"><Icon name="Terminal" :size="22"/><strong>把申请交给接口</strong><p>一次接入，串联你的业务流程。</p><button @click="go('developer')">查看接入方式<Icon name="ArrowUpRight" :size="14"/></button></div>
    </div>
    <div class="sidebar-footer"><button v-if="allowed('help')" class="help-link" :class="{active:page==='help'}" @click="go('help')"><Icon name="CircleHelp" :size="18"/>使用指南</button><div class="profile"><div class="avatar">{{initial}}</div><div><strong>{{user.name}}</strong><small>{{user.role==='admin'?'系统管理员':user.role==='operator'?'运营成员':'服务账户'}}</small></div><button class="icon-button" aria-label="退出账户" title="退出账户" @click="logout"><Icon name="LogOut" :size="17"/></button></div></div>
@@ -254,6 +259,7 @@ onUnmounted(() => {
    <Billing v-if="page==='billing'&&allowed('billing')" :user="user" :refresh="refreshTick" @detail="detailID=$event" @redeemed="notify($event);refresh()"/>
    <Admin v-if="page==='admin'&&user.permissions.includes('admin.overview.read')" :user="user" @toast="notify" @changed="refresh"/>
 
+   <CustomMenuPage v-if="page.startsWith('custom:')&&allowed(page)" :id="page.slice(7)" :refresh="refreshTick"/>
    <Developers v-if="page==='developer'&&allowed('developer')" @toast="notify"/><Announcements v-if="page==='announcements'&&allowed('announcements')" :refresh="refreshTick"/><Help v-if="page==='help'&&allowed('help')" :allow-developer="allowed('developer')"/>
    <footer class="page-footer"><span>回序 HUIXU · 服务有序，进度有据。</span><span><i class="status-dot" :class="{offline:loadError}"/>{{loadError?'连接暂时中断':'数据每 15 秒更新'}}</span></footer>
   </main></div>
