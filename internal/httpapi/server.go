@@ -78,6 +78,7 @@ func New(db *store.Store, secure bool) http.Handler {
 	s.executionRoutes(m)
 	s.announcementRoutes(m)
 	s.riskRoutes(m)
+	s.siteRoutes(m)
 	// Unknown API routes must never return an HTML 200 response.
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
 	m.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) { fail(w, 404, "接口不存在") })
@@ -96,6 +97,9 @@ func New(db *store.Store, secure bool) http.Handler {
 		if _, err := fs.Stat(assets, path); err == nil {
 			if strings.HasPrefix(path, "assets/admin-") {
 				permission := "admin.overview.read"
+				if strings.HasPrefix(path, "assets/admin-site-") {
+					permission = "admin.site.manage"
+				}
 				if strings.HasPrefix(path, "assets/admin-timeline-") {
 					permission = "admin.refunds.timeline"
 				}
@@ -110,7 +114,9 @@ func New(db *store.Store, secure bool) http.Handler {
 				s.require(permission, files.ServeHTTP).ServeHTTP(w, r)
 				return
 			}
-			if strings.HasPrefix(path, "assets/") {
+			if strings.HasPrefix(path, "assets/feature-") {
+				w.Header().Set("Cache-Control", "private, no-store")
+			} else if strings.HasPrefix(path, "assets/") {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			files.ServeHTTP(w, r)
@@ -118,6 +124,18 @@ func New(db *store.Store, secure bool) http.Handler {
 		}
 		if path != "developers/reference" && !strings.HasPrefix(path, "workspace/") {
 			http.NotFound(w, r)
+			return
+		}
+		if path == "workspace/admin" {
+			s.require("admin.overview.read", func(w http.ResponseWriter, r *http.Request) {
+				b, err := fs.ReadFile(assets, "index.html")
+				if err != nil {
+					fail(w, 503, "前端资源不可用")
+					return
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write(b)
+			}).ServeHTTP(w, r)
 			return
 		}
 		b, err := fs.ReadFile(assets, "index.html")
@@ -153,7 +171,7 @@ func New(db *store.Store, secure bool) http.Handler {
 				fail(w, 500, "服务暂时不可用")
 			}
 		}()
-		m.ServeHTTP(w, r)
+		s.featureGate(m).ServeHTTP(w, r)
 	}))
 }
 func current(r *http.Request) store.User { return r.Context().Value(userKey{}).(store.User) }
@@ -199,6 +217,11 @@ func (s *Server) result(w http.ResponseWriter, v any, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, store.ErrAuthRate):
+		w.Header().Set("Retry-After", "60")
+		fail(w, 429, err.Error())
+	case errors.Is(err, store.ErrEmailUnavailable):
+		fail(w, 503, err.Error())
 	case errors.Is(err, store.ErrSubmissionPaused):
 		fail(w, 403, "当前账户暂不能提交新申请，已受理申请继续处理，请联系服务专员")
 	case errors.Is(err, store.ErrForbidden):

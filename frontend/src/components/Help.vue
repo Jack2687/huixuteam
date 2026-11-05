@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Icon from './Icon.vue';
+defineProps<{allowDeveloper:boolean}>();
 const faqs=[
  ['账户里的积分代表什么？','每 1 积分对应 1 R。账户中显示的每笔服务价格就是成功办理所需的积分；例如 30 积分对应 30 R。'],
  ['怎样一次提交多个账号？','选择“提交申请”，切换到“批量填写”。可以上传 TXT、CSV，也可以粘贴表格三列。每批最多 500 个账号，按邮箱、密码、2FA 密钥的顺序填写。连续三条或更多横线可作分隔符；密码含首尾横线时请使用 CSV。'],
@@ -11,4 +12,4 @@ const faqs=[
  ['在哪里找到人工支持？','联系为你开通回序账户的服务人员。提供申请编号与问题描述即可，无需在聊天中再次发送密码和验证密钥。'],
 ];
 </script>
-<template><div class="help-layout"><aside class="guide-intro"><span class="eyebrow">START HERE</span><Icon name="CircleHelp" :size="40"/><h2>把疑问<br/>留在开始之前。</h2><p>了解资料格式、费用规则与状态含义，减少来回确认。</p><a href="/developers/reference" class="text-button" target="_blank" rel="noopener">需要接口接入？<Icon name="ArrowUpRight"/></a></aside><section class="help-card"><details v-for="([title,text],index) in faqs" :key="title"><summary><span class="faq-index">{{String(index+1).padStart(2,'0')}}</span>{{title}}<Icon name="Plus"/></summary><p>{{text}}</p></details></section></div></template>
+<template><div class="help-layout"><aside class="guide-intro"><span class="eyebrow">START HERE</span><Icon name="CircleHelp" :size="40"/><h2>把疑问<br/>留在开始之前。</h2><p>了解资料格式、费用规则与状态含义，减少来回确认。</p><a v-if="allowDeveloper" href="/developers/reference" class="text-button" target="_blank" rel="noopener">需要接口接入？<Icon name="ArrowUpRight"/></a></aside><section class="help-card"><details v-for="([title,text],index) in faqs" :key="title"><summary><span class="faq-index">{{String(index+1).padStart(2,'0')}}</span>{{title}}<Icon name="Plus"/></summary><p>{{text}}</p></details></section></div></template>

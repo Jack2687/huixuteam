@@ -8,6 +8,7 @@ import AdminRefundMonitor from "./AdminRefundMonitor.vue";
 import Modal from "./Modal.vue";
 import Pagination from "./Pagination.vue";
 const RefundExecutionSettings=defineAsyncComponent(()=>import("./RefundExecutionSettings.vue"));
+const AdminSiteSettings=defineAsyncComponent(()=>import("./AdminSiteSettings.vue"));
 const AdminRiskMonitor=defineAsyncComponent(()=>import("./AdminRiskMonitor.vue"));
 import {
   api,
@@ -49,6 +50,7 @@ const props = defineProps<{ user: User }>();
 const emit = defineEmits<{ toast: [message: string]; changed: [] }>();
 const can = (permission: string) => props.user.permissions.includes(permission);
 const allTabs = [
+  { key: "site", label: "站点设置", permission: "admin.site.manage" },
   { key: "overview", label: "运营概况", permission: "admin.overview.read" },
   { key: "reports", label: "账户报表", permission: "admin.reports.read" },
   { key: "users", label: "账户管理", permission: "admin.users.manage" },
@@ -114,6 +116,7 @@ const roles: Record<string, string> = {
   member: "普通用户",
 };
 const actions: Record<string, string> = {
+  "site.features":"调整功能开关", "site.security":"调整安全与认证", "site.mail":"调整邮件设置", "site.mail.test":"发送测试邮件", "site.mail.connection_test":"测试邮件连接", "user.password_reset_email":"邮箱重置密码",
   "risk.settings": "调整风控配置", "risk.customer": "调整客户风控", "risk.release": "解除访问限制", "risk.resolve": "处理风控事件", "risk.key_revoke": "撤销客户 API 密钥",
   "announcement.create": "撰写公告", "announcement.update": "调整公告", "announcement.delete": "移除公告",
   "user.create": "新增账户",
@@ -153,7 +156,7 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
+    if (tab.value === "site" || tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
     const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
@@ -551,6 +554,7 @@ function codeState(code: Code) {
       </div>
     </section></template
   >
+  <AdminSiteSettings v-if="tab==='site'&&can('admin.site.manage')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminAccountReports v-else-if="tab === 'reports'" :key="user.id" :user-id="user.id"/>
   <AdminRefundMonitor v-else-if="tab === 'refunds'" :can-timeline="can('admin.refunds.timeline')" @toast="emit('toast',$event)" @changed="emit('changed')"/>

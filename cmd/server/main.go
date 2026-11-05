@@ -67,6 +67,8 @@ func run(email string, cents int64, note string) error {
 	defer stopWorker()
 	workerDone := make(chan struct{})
 	riskDone := make(chan struct{})
+	mailDone := make(chan struct{})
+	go func() { defer close(mailDone); db.RunMailQueue(workerCtx) }()
 	go func() { defer close(riskDone); db.RunRiskMonitor(workerCtx) }()
 	runner := refundworker.DefaultRunner()
 	go func() { defer close(workerDone); (&refundworker.Worker{DB: db, Runner: runner}).Run(workerCtx) }()
@@ -85,6 +87,7 @@ func run(email string, cents int64, note string) error {
 	stopWorker()
 	<-workerDone
 	<-riskDone
+	<-mailDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

@@ -13,6 +13,32 @@ CREATE TABLE IF NOT EXISTS sessions (
  expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS site_settings (
+ id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id),
+ features JSONB NOT NULL DEFAULT '{"overview":true,"refunds":true,"billing":true,"developer":true,"announcements":true,"help":true}',
+ security JSONB NOT NULL DEFAULT '{"registration_enabled":false,"email_verification_enabled":true,"email_domains":[]}',
+ mail JSONB NOT NULL DEFAULT '{"host":"","port":587,"username":"","from_email":"","from_name":"回序 HUIXU","encryption":"starttls"}',
+ mail_password BYTEA NOT NULL DEFAULT ''::bytea, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO site_settings(id) VALUES(true) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS auth_email_challenges (
+ email TEXT NOT NULL, purpose TEXT NOT NULL CHECK(purpose IN ('register','reset')),
+ id TEXT NOT NULL UNIQUE, code_hash TEXT NOT NULL, user_id TEXT NOT NULL DEFAULT '', credential_hash TEXT NOT NULL DEFAULT '',
+ attempts INT NOT NULL DEFAULT 0, expires_at TIMESTAMPTZ NOT NULL,
+ consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(email,purpose)
+);
+CREATE TABLE IF NOT EXISTS auth_email_limits (
+ key TEXT PRIMARY KEY, window_start TIMESTAMPTZ NOT NULL DEFAULT now(), hits INT NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS mail_jobs (
+ id TEXT PRIMARY KEY, recipient TEXT NOT NULL, purpose TEXT NOT NULL CHECK(purpose IN ('register','reset','test')),
+ challenge_id TEXT NOT NULL DEFAULT '', payload BYTEA, status TEXT NOT NULL DEFAULT 'queued',
+ attempts INT NOT NULL DEFAULT 0, error_code TEXT NOT NULL DEFAULT '', lease_token TEXT NOT NULL DEFAULT '',
+ next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS mail_jobs_pending ON mail_jobs(next_attempt_at) WHERE status IN ('queued','retry','sending');
+CREATE INDEX IF NOT EXISTS mail_jobs_time ON mail_jobs(created_at DESC);
 CREATE TABLE IF NOT EXISTS api_keys (
  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
  token_hash TEXT UNIQUE NOT NULL, prefix TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -38,6 +38,7 @@ var ErrForbidden = errors.New("没有执行此操作的权限")
 var ErrInvalid = errors.New("参数错误")
 
 type Store struct {
+	authCodeKey  [32]byte
 	Pool         *pgxpool.Pool
 	cipher       cipher.AEAD
 	runtimeReady atomic.Bool
@@ -146,7 +147,7 @@ func Open(ctx context.Context, dsn string, master []byte) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{Pool: pool, cipher: aead}, nil
+	return &Store{Pool: pool, cipher: aead, authCodeKey: sha256.Sum256(append(append([]byte{}, master...), []byte("huixu-email-codes-v1")...))}, nil
 }
 func (s *Store) Encrypt(id string, a refundprovider.Account) ([]byte, error) {
 	raw, err := json.Marshal(a)
