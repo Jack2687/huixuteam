@@ -16,12 +16,12 @@ type siteMenu struct {
 	OpenInNewTab bool   `json:"open_in_new_tab,omitempty"`
 }
 
-var customerMenus = []siteMenu{{Key: "partners", Label: "伙伴计划", Icon: "Users"}, {Key: "overview", Label: "总览", Icon: "LayoutDashboard"}, {Key: "refunds", Label: "申请记录", Icon: "FileText"}, {Key: "billing", Label: "资金与账单", Icon: "Wallet"}, {Key: "developer", Label: "接口接入", Icon: "CodeXml"}, {Key: "announcements", Label: "公告中心", Icon: "Bell"}, {Key: "help", Label: "使用指南", Icon: "CircleHelp"}}
+var customerMenus = []siteMenu{{Key: "overview", Label: "总览", Icon: "LayoutDashboard"}, {Key: "refunds", Label: "申请记录", Icon: "FileText"}, {Key: "billing", Label: "资金与账单", Icon: "Wallet"}, {Key: "developer", Label: "接口接入", Icon: "CodeXml"}, {Key: "announcements", Label: "公告中心", Icon: "Bell"}, {Key: "partners", Label: "伙伴计划", Icon: "Users"}, {Key: "help", Label: "使用指南", Icon: "CircleHelp"}}
 
 func enabledMenus(v store.SiteSettings) []siteMenu {
 	out := []siteMenu{}
 	for _, item := range customerMenus {
-		if v.Features[item.Key] {
+		if v.Features[item.Key] && (item.Key != "partners" || v.PartnerRewardsEnabled) {
 			out = append(out, item)
 		}
 	}
@@ -210,7 +210,7 @@ func (s *Server) featureGate(next http.Handler) http.Handler {
 				return
 			}
 			for _, name := range features {
-				if !v.Features[name] {
+				if !v.Features[name] || (name == "partners" && !v.PartnerRewardsEnabled) {
 					fail(w, 404, "该功能暂未开放")
 					return
 				}

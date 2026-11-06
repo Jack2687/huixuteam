@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import {ref,onMounted,computed} from 'vue'
 import {api,money,date,copy} from '../lib/api'
+const emit=defineEmits<{changed:[]}>()
 const props=defineProps<{admin?:boolean}>()
 const data=ref<any>({items:[],stats:{}}),rules=ref<any>(null),page=ref(1),search=ref(''),busy=ref(false),saving=ref(false),error=ref(''),message=ref('')
 const path=computed(()=>props.admin?'/api/admin/invites':'/api/partners')
 const link=computed(()=>location.origin+'/?invite='+encodeURIComponent(data.value.invite_code||''))
 async function load(initial=false){busy.value=true;error.value='';try{data.value=await api(`${path.value}?page=${page.value}&size=20&q=${encodeURIComponent(search.value)}`);if(initial)rules.value=JSON.parse(JSON.stringify(data.value.rules))}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
-async function save(){saving.value=true;error.value='';try{await api(path.value,{method:'PUT',body:JSON.stringify(rules.value)});message.value='规则已保存，仅影响新申请';await load(true)}catch(e){error.value=(e as Error).message}finally{saving.value=false}}
+async function save(){saving.value=true;error.value='';try{await api(path.value,{method:'PUT',body:JSON.stringify(rules.value)});message.value='规则已保存，仅影响新申请';await load(true);emit('changed')}catch(e){error.value=(e as Error).message}finally{saving.value=false}}
 async function share(){try{await copy(link.value);message.value='邀请链接已复制'}catch{error.value='复制失败，请手动选择邀请链接'}}
 onMounted(()=>load(true))
 </script>

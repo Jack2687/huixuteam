@@ -64,6 +64,31 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 	if !strings.Contains(call("GET", "/api/workspace/navigation", "", ad, 200), "运营控制台") {
 		t.Fatal("admin menu missing")
 	}
+	for _, enabled := range []bool{false, true} {
+		rules := store.PartnerRules{Enabled: enabled, Stages: []store.PartnerStage{{UntilDays: 30, RatePercent: 10}, {UntilDays: 60, RatePercent: 5}, {UntilDays: 90, RatePercent: 2}}}
+		raw, _ := json.Marshal(rules)
+		call("PUT", "/api/admin/invites", string(raw), ad, 200)
+		for _, token := range []string{mem, ad} {
+			nav := call("GET", "/api/workspace/navigation", "", token, 200)
+			if strings.Contains(nav, "伙伴计划") != enabled {
+				t.Fatal("reward switch did not control server navigation")
+			}
+			status := 404
+			if enabled {
+				status = 200
+			}
+			call("GET", "/api/partners", "", token, status)
+			call("GET", "/workspace/partners", "", token, status)
+			if enabled && (strings.Index(nav, "公告中心") > strings.Index(nav, "伙伴计划") || !strings.HasPrefix(nav, `{"menus":[{"key":"overview"`)) {
+				t.Fatal("partner menu order changed")
+			}
+		}
+		public := call("GET", "/api/public/site", "", "", 200)
+		if strings.Contains(public, "伙伴计划") != enabled {
+			t.Fatal("public menu bypass")
+		}
+		call("GET", "/api/admin/invites", "", ad, 200)
+	}
 	for _, token := range []string{mem, ops} {
 		if strings.Contains(call("GET", "/api/auth/me", "", token, 200), "admin.") {
 			t.Fatal("non-admin user received admin permissions")

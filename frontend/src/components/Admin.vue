@@ -561,7 +561,7 @@ function codeState(code: Code) {
     </section></template
   >
   <AdminSiteSettings v-if="tab==='site'&&can('admin.site.manage')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
-  <PartnerPage v-else-if="tab==='invites'" admin/>
+  <PartnerPage v-else-if="tab==='invites'" admin @changed="emit('changed')"/>
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminRedeemUsage v-else-if="tab === 'redemptions'" @back="tab='codes'"/>
   <AdminAccountReports v-else-if="tab === 'reports'" :key="user.id" :user-id="user.id"/>

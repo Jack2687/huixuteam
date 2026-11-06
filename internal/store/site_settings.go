@@ -28,11 +28,12 @@ type SiteMail struct {
 	PasswordConfigured bool   `json:"password_configured"`
 }
 type SiteSettings struct {
-	Branding    SiteBranding    `json:"branding"`
-	CustomMenus []CustomMenu    `json:"custom_menus"`
-	Features    map[string]bool `json:"features"`
-	Security    SiteSecurity    `json:"security"`
-	Mail        SiteMail        `json:"mail"`
+	PartnerRewardsEnabled bool            `json:"-"`
+	Branding              SiteBranding    `json:"branding"`
+	CustomMenus           []CustomMenu    `json:"custom_menus"`
+	Features              map[string]bool `json:"features"`
+	Security              SiteSecurity    `json:"security"`
+	Mail                  SiteMail        `json:"mail"`
 }
 type MailInput struct {
 	SiteMail
@@ -45,7 +46,7 @@ func (s *Store) SiteSettings(ctx context.Context) (SiteSettings, error) {
 	var features, security, smtp, menus []byte
 	var hasPassword bool
 	var brandRevision string
-	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0,custom_menus,b.revision FROM site_settings s JOIN site_branding b ON b.id=s.id WHERE s.id").Scan(&features, &security, &smtp, &hasPassword, &menus, &brandRevision)
+	err := s.Pool.QueryRow(ctx, "SELECT features,security,mail,octet_length(mail_password)>0,custom_menus,b.revision,COALESCE((invitations->>'enabled')::boolean,false) FROM site_settings s JOIN site_branding b ON b.id=s.id WHERE s.id").Scan(&features, &security, &smtp, &hasPassword, &menus, &brandRevision, &v.PartnerRewardsEnabled)
 	if err != nil {
 		return v, err
 	}
