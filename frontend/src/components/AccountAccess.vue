@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import Icon from './Icon.vue';
+import LoginSlider from './LoginSlider.vue';
+const slider=ref<InstanceType<typeof LoginSlider>|null>(null),sliderProof=ref(''),invite=ref(new URLSearchParams(location.search).get('invite')||'');
 import { api, type User } from '../lib/api';
 import type { PublicSite } from '../lib/site';
 const props=defineProps<{site:PublicSite;sessionError:string}>();
@@ -31,13 +33,13 @@ async function submit(){
  busy.value=true;
  try{
   if(mode.value==='login'){
-   const user=await api<User>('/api/auth/login',{method:'POST',body:JSON.stringify({email:email.value,password:password.value})});password.value='';emit('login',user);
+   const user=await api<User>('/api/auth/login',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,slider_proof:sliderProof.value})});password.value='';emit('login',user);
   }else{
    const register=mode.value==='register';
-   await api(register?'/api/auth/register':'/api/auth/reset-password',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,code:code.value,...(register?{name:name.value}:{})})});
+   await api(register?'/api/auth/register':'/api/auth/reset-password',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,code:code.value,...(register?{name:name.value,invite:invite.value}:{})})});
    switchMode('login');message.value=register?'注册成功，请使用新账号登录。':'密码已重置，旧登录和 API 密钥已失效，请重新登录。';
   }
- }catch(e){error.value=(e as Error).message}finally{busy.value=false}
+ }catch(e){error.value=(e as Error).message;if(mode.value==='login')void slider.value?.reset()}finally{busy.value=false}
 }
 onUnmounted(()=>clearInterval(timer));
 </script>
@@ -51,6 +53,8 @@ onUnmounted(()=>clearInterval(timer));
    <label>{{mode==='login'?'账户密码':'设置密码'}}<input v-model="password" type="password" :autocomplete="mode==='login'?'current-password':'new-password'" :minlength="1" maxlength="72" required :placeholder="mode==='login'?'输入登录密码':'12～72 字节，建议混合字母和数字'"/></label>
    <label v-if="mode!=='login'">确认密码<input v-model="confirmation" type="password" autocomplete="new-password" minlength="1" maxlength="72" required placeholder="再次输入密码"/></label>
    <p v-if="error||(mode==='login'&&sessionError)" class="form-error" role="alert">{{error||sessionError}}</p><p v-if="message" class="auth-message" role="status">{{message}}</p>
+   <label v-if="mode==='register'">邀请标识（选填）<input v-model="invite" maxlength="80" placeholder="来自伙伴的邀请标识"/></label>
+   <LoginSlider v-if="mode==='login'&&site.login_slider_enabled!==false" ref="slider" @verified="sliderProof=$event"/>
    <button class="button primary full" :disabled="busy||sending"><span>{{busy?'正在处理…':mode==='login'?'进入服务台':mode==='register'?'创建账户':'确认重置密码'}}</span><Icon :name="busy?'LoaderCircle':'ArrowUpRight'" :class="{spin:busy}"/></button>
   </form>
   <div class="auth-links"><template v-if="mode==='login'"><button v-if="site.registration_enabled" type="button" :disabled="busy||sending" @click="switchMode('register')">注册新账户</button><span v-else>没有账户？请联系服务人员。</span><button v-if="site.password_reset_enabled" type="button" :disabled="busy||sending" @click="switchMode('reset')">忘记密码？</button></template><button v-else type="button" :disabled="busy||sending" @click="switchMode('login')">返回登录</button></div>

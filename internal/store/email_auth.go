@@ -168,6 +168,7 @@ func (s *Store) verifyCodeTx(ctx context.Context, tx pgx.Tx, email, purpose, cod
 }
 
 type RegistrationInput struct {
+	Invite   string `json:"invite"`
 	Email    string `json:"email"`
 	Name     string `json:"name"`
 	Password string `json:"password"`
@@ -216,7 +217,20 @@ func (s *Store) Register(ctx context.Context, v RegistrationInput) error {
 	if e = tx.QueryRow(ctx, "SELECT default_service_fee FROM site_service_settings WHERE id FOR SHARE").Scan(&fee); e != nil {
 		return e
 	}
-	tag, e := tx.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role,service_fee) VALUES($1,$2,$3,$4,'member',$5) ON CONFLICT(email) DO NOTHING", ID(), v.Email, v.Name, string(hashed), fee)
+	var inviter *string
+	if v.Invite != "" {
+		if len(v.Invite) > 80 {
+			return invalid("邀请标识无效")
+		}
+		var owner string
+		if e = tx.QueryRow(ctx, "SELECT id FROM users WHERE invite_code=$1 AND NOT disabled AND deleted_at IS NULL FOR SHARE", v.Invite).Scan(&owner); errors.Is(e, pgx.ErrNoRows) {
+			return invalid("邀请标识无效")
+		} else if e != nil {
+			return e
+		}
+		inviter = &owner
+	}
+	tag, e := tx.Exec(ctx, "INSERT INTO users(id,email,name,password_hash,role,service_fee,invited_by) VALUES($1,$2,$3,$4,'member',$5,$6) ON CONFLICT(email) DO NOTHING", ID(), v.Email, v.Name, string(hashed), fee, inviter)
 	if e != nil {
 		return e
 	}

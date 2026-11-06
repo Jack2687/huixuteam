@@ -10,6 +10,7 @@ import AdminRefundMonitor from "./AdminRefundMonitor.vue";
 import Modal from "./Modal.vue";
 import Pagination from "./Pagination.vue";
 const RefundExecutionSettings=defineAsyncComponent(()=>import("./RefundExecutionSettings.vue"));
+const PartnerPage=defineAsyncComponent(()=>import("./PartnerPage.vue"));
 const AdminSiteSettings=defineAsyncComponent(()=>import("./AdminSiteSettings.vue"));
 const AdminRiskMonitor=defineAsyncComponent(()=>import("./AdminRiskMonitor.vue"));
 import {
@@ -53,6 +54,7 @@ const props = defineProps<{ user: User }>();
 const emit = defineEmits<{ toast: [message: string]; changed: [] }>();
 const can = (permission: string) => props.user.permissions.includes(permission);
 const allTabs = [
+ {key:"invites",label:"邀请管理",permission:"admin.site.manage"},
   { key: "site", label: "站点设置", permission: "admin.site.manage" },
   { key: "overview", label: "运营概况", permission: "admin.overview.read" },
   { key: "reports", label: "账户报表", permission: "admin.reports.read" },
@@ -158,7 +160,7 @@ async function load() {
   error.value = "";
   loading.value = true;
   try {
-    if (tab.value === "redemptions" || tab.value === "site" || tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
+    if (tab.value === "invites" || tab.value === "redemptions" || tab.value === "site" || tab.value === "permissions" || tab.value === "execution" || tab.value === "announcements" || tab.value === "reports" || tab.value === "refunds" || tab.value === "risk") return;
     const path = `/api/admin/${tab.value}?${new URLSearchParams({ page: String(page.value), size: String(size.value), q: search.value })}`;
     if (tab.value === "overview")
       overview.value = await api(path, { signal: c.signal });
@@ -559,6 +561,7 @@ function codeState(code: Code) {
     </section></template
   >
   <AdminSiteSettings v-if="tab==='site'&&can('admin.site.manage')" @toast="emit('toast',$event)" @changed="emit('changed')"/>
+  <PartnerPage v-else-if="tab==='invites'" admin/>
   <AdminAnnouncements v-else-if="tab === 'announcements'" @toast="emit('toast',$event)" @changed="emit('changed')"/>
   <AdminRedeemUsage v-else-if="tab === 'redemptions'" @back="tab='codes'"/>
   <AdminAccountReports v-else-if="tab === 'reports'" :key="user.id" :user-id="user.id"/>
@@ -662,7 +665,7 @@ function codeState(code: Code) {
           <tr>
             <th class="selection-cell"><input type="checkbox" aria-label="选择本页账户" :checked="allUsersSelected" :indeterminate="someUsersSelected && !allUsersSelected" :disabled="busy || loading || !users.length" @change="selectUserPage(($event.target as HTMLInputElement).checked)" /></th>
             <th>用户</th>
-            <th>角色</th>
+            <th>注册时间</th><th>角色</th>
             <th>可用 / 已预留积分</th>
             <th>服务单价</th>
             <th>状态</th>
@@ -681,7 +684,7 @@ function codeState(code: Code) {
                 </div>
               </div>
             </td>
-            <td>
+            <td>{{ u.created_at ? new Date(u.created_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}) : '—' }}</td><td>
               <span class="badge gray">{{ roles[u.role] }}</span>
             </td>
             <td>{{ money(u.balance - u.frozen) }} / {{ money(u.frozen) }}</td>

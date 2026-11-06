@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,9 @@ import (
 
 func TestLoginLimitIsolatesAccountsBehindSameProxy(t *testing.T) {
 	db := testutil.Database(t)
+	if _, e := db.Pool.Exec(context.Background(), "UPDATE site_settings SET security=jsonb_set(security,'{login_slider_enabled}','false')"); e != nil {
+		t.Fatal(e)
+	}
 	a := testutil.Admin(t, db)
 	u := testutil.Member(t, db, a, "first@test.invalid", "member")
 	v := testutil.Member(t, db, a, "second@test.invalid", "member")

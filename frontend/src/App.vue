@@ -13,6 +13,7 @@ const RefundForm=defineAsyncComponent(()=>import("./components/RefundForm.vue"))
 const RefundDetail=defineAsyncComponent(()=>import("./components/RefundDetail.vue"));
 const Billing=defineAsyncComponent(()=>import("./components/Billing.vue"));
 const Developers=defineAsyncComponent(()=>import("./components/Developers.vue"));
+const PartnerPage=defineAsyncComponent(()=>import("./components/PartnerPage.vue"));
 const Help=defineAsyncComponent(()=>import("./components/Help.vue"));
 const ApiDocs=defineAsyncComponent(()=>import("./components/ApiDocs.vue"));
 const Admin=defineAsyncComponent(()=>import("./components/Admin.vue"));
@@ -24,9 +25,10 @@ import {
   type Dashboard,
   type Notification,
 } from "./lib/api";
-type BuiltinPage = 'overview' | 'refunds' | 'billing' | 'developer' | 'announcements' | 'help' | 'api-docs' | 'admin' | 'unavailable';
+type BuiltinPage = 'partners' | 'overview' | 'refunds' | 'billing' | 'developer' | 'announcements' | 'help' | 'api-docs' | 'admin' | 'unavailable';
 type PageName = BuiltinPage | `custom:${string}`;
 const pages: Record<BuiltinPage,{label:string;eyebrow:string;title:string;subtitle:string;icon:string}> = {
+ partners:{label:'伙伴计划',eyebrow:'PARTNERS / REWARDS',title:'伙伴计划',subtitle:'邀请伙伴，获得平台服务积分。',icon:'Users'},
  overview:{label:'总览',eyebrow:'01 / OVERVIEW',title:'服务总览',subtitle:'掌握申请进展，安排下一步工作。',icon:'LayoutDashboard'},
  refunds:{label:'申请记录',eyebrow:'02 / REQUESTS',title:'申请记录',subtitle:'从受理到完成，集中查阅每一笔服务记录。',icon:'FileText'},
  billing:{label:'资金与账单',eyebrow:'03 / BALANCE',title:'资金与账单',subtitle:'可用、预留与支出，每一笔变动均可追溯。',icon:'Wallet'},
@@ -266,6 +268,7 @@ onUnmounted(() => {
    <Admin v-if="page==='admin'&&adminMenu" :user="user" @toast="notify" @changed="refresh"/>
 
    <CustomMenuPage v-if="page.startsWith('custom:')&&allowed(page)" :id="page.slice(7)" :refresh="refreshTick"/>
+   <PartnerPage v-if="page==='partners'&&allowed('partners')"/>
    <Developers v-if="page==='developer'&&allowed('developer')" @toast="notify"/><Announcements v-if="page==='announcements'&&allowed('announcements')" :refresh="refreshTick"/><Help v-if="page==='help'&&allowed('help')" :allow-developer="allowed('developer')"/>
    <footer class="page-footer"><span>回序 HUIXU · 服务有序，进度有据。</span><span><i class="status-dot" :class="{offline:loadError}"/>{{loadError?'连接暂时中断':'数据每 15 秒更新'}}</span></footer>
   </main></div>

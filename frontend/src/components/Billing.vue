@@ -16,6 +16,7 @@ const items = ref<Entry[]>([]),
   error = ref(""),
   loading = ref(true);
 const kinds: Record<string, { label: string; icon: string; color: string }> = {
+ invite_reward:{label:"伙伴奖励",icon:"Users",color:"green"},
   redeem: { label: "兑换入账", icon: "KeyRound", color: "green" },
   credit: { label: "人工入账", icon: "Plus", color: "green" },
   debit: { label: "人工扣减", icon: "Minus", color: "red" },

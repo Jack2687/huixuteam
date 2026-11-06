@@ -10,9 +10,10 @@ import (
 	"strings"
 )
 
-var FeatureNames = []string{"overview", "refunds", "billing", "developer", "announcements", "help"}
+var FeatureNames = []string{"overview", "refunds", "billing", "developer", "announcements", "help", "partners"}
 
 type SiteSecurity struct {
+	LoginSliderEnabled       bool     `json:"login_slider_enabled"`
 	RegistrationEnabled      bool     `json:"registration_enabled"`
 	EmailVerificationEnabled bool     `json:"email_verification_enabled"`
 	EmailDomains             []string `json:"email_domains"`

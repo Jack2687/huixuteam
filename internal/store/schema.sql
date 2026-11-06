@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS refund_events (
 ALTER TABLE refund_events ADD COLUMN IF NOT EXISTS internal BOOLEAN NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS ledger (
  id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), refund_id TEXT REFERENCES refunds(id),
- kind TEXT NOT NULL CHECK(kind IN ('credit','debit','freeze','release','settlement','redeem')),
+ kind TEXT NOT NULL CHECK(kind IN ('credit','debit','freeze','release','settlement','redeem','invite_reward')),
  amount BIGINT NOT NULL, balance_after BIGINT NOT NULL, note TEXT NOT NULL DEFAULT '',
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, id DESC);
 ALTER TABLE ledger DROP CONSTRAINT IF EXISTS ledger_kind_check;
-ALTER TABLE ledger ADD CONSTRAINT ledger_kind_check CHECK(kind IN ('credit','debit','freeze','release','settlement','redeem'));
+ALTER TABLE ledger ADD CONSTRAINT ledger_kind_check CHECK(kind IN ('credit','debit','freeze','release','settlement','redeem','invite_reward'));
 CREATE TABLE IF NOT EXISTS audit_logs (
  id BIGSERIAL PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id), action TEXT NOT NULL,
  target_id TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -254,3 +254,58 @@ CREATE TABLE IF NOT EXISTS site_service_settings (
 );
 INSERT INTO site_service_settings(id) VALUES(true) ON CONFLICT DO NOTHING;
 ALTER TABLE users ALTER COLUMN service_fee SET DEFAULT 10000;
+
+-- Partner rewards apply only to orders admitted after this migration.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code text NOT NULL DEFAULT md5(random()::text||clock_timestamp()::text);
+CREATE UNIQUE INDEX IF NOT EXISTS users_invite_code ON users(invite_code);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by text REFERENCES users(id);
+ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS invitations jsonb NOT NULL DEFAULT '{"enabled":true,"stages":[{"until_days":30,"rate_percent":10},{"until_days":60,"rate_percent":5},{"until_days":90,"rate_percent":2}]}';
+UPDATE site_settings SET security=security||'{"login_slider_enabled":true}' WHERE NOT security ? 'login_slider_enabled';
+UPDATE site_settings SET features=features||'{"partners":true}' WHERE NOT features ? 'partners';
+CREATE TABLE IF NOT EXISTS partner_candidates(
+ order_id text PRIMARY KEY REFERENCES refunds(id),invitee_id text NOT NULL REFERENCES users(id),inviter_id text NOT NULL REFERENCES users(id),
+ rate_percent integer NOT NULL CHECK(rate_percent BETWEEN 1 AND 30),CHECK(invitee_id<>inviter_id)
+);
+CREATE TABLE IF NOT EXISTS partner_rewards(
+ order_id text PRIMARY KEY REFERENCES refunds(id),invitee_id text NOT NULL REFERENCES users(id),inviter_id text NOT NULL REFERENCES users(id),
+ rate_percent integer NOT NULL,fee bigint NOT NULL CHECK(fee>=0),amount bigint NOT NULL CHECK(amount>=0),created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS partner_rewards_owner ON partner_rewards(inviter_id,invitee_id);
+CREATE INDEX IF NOT EXISTS users_invited_by ON users(invited_by);
+CREATE OR REPLACE FUNCTION partner_admit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE inviter text; joined timestamptz; rules jsonb; rate integer;
+BEGIN
+ SELECT invitations INTO rules FROM site_settings WHERE id;
+ IF rules->>'enabled' IS DISTINCT FROM 'true' THEN RETURN NEW; END IF;
+ SELECT invited_by,created_at INTO inviter,joined FROM users WHERE id=NEW.user_id;
+ IF inviter IS NOT NULL AND inviter<>NEW.user_id AND NEW.created_at>=joined THEN
+  SELECT (s->>'rate_percent')::int INTO rate FROM jsonb_array_elements(rules->'stages') s
+   WHERE NEW.created_at<joined+(s->>'until_days')::int*interval '1 day' ORDER BY (s->>'until_days')::int LIMIT 1;
+  IF rate>0 THEN INSERT INTO partner_candidates VALUES(NEW.id,NEW.user_id,inviter,rate) ON CONFLICT DO NOTHING; END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION partner_settle() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE candidate partner_candidates; granted bigint; new_balance bigint;
+BEGIN
+ IF NEW.kind<>'settlement' OR NEW.amount>=0 THEN RETURN NEW; END IF;
+ SELECT * INTO candidate FROM partner_candidates WHERE order_id=NEW.refund_id AND invitee_id=NEW.user_id;
+ IF NOT FOUND THEN RETURN NEW; END IF;
+ granted=(-NEW.amount)*candidate.rate_percent/100;
+ INSERT INTO partner_rewards VALUES(candidate.order_id,candidate.invitee_id,candidate.inviter_id,candidate.rate_percent,-NEW.amount,granted,now()) ON CONFLICT DO NOTHING;
+ IF FOUND AND granted>0 THEN
+  UPDATE users SET balance=balance+granted WHERE id=candidate.inviter_id RETURNING balance INTO new_balance;
+  INSERT INTO ledger(user_id,kind,amount,balance_after,note) VALUES(candidate.inviter_id,'invite_reward',granted,new_balance,'伙伴计划消费奖励');
+ END IF;
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='partner_admission' AND tgrelid='refunds'::regclass) THEN
+  CREATE TRIGGER partner_admission AFTER INSERT ON refunds FOR EACH ROW EXECUTE FUNCTION partner_admit();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='partner_settlement' AND tgrelid='ledger'::regclass) THEN
+  CREATE TRIGGER partner_settlement AFTER INSERT ON ledger FOR EACH ROW EXECUTE FUNCTION partner_settle();
+ END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS auth_slider_challenges(id text PRIMARY KEY,binding text NOT NULL,target integer NOT NULL,proof_hash text UNIQUE,created_at timestamptz NOT NULL DEFAULT now(),expires_at timestamptz NOT NULL);
+CREATE INDEX IF NOT EXISTS auth_slider_expiry ON auth_slider_challenges(expires_at);

@@ -44,6 +44,7 @@ type Store struct {
 	runtimeReady atomic.Bool
 }
 type User struct {
+	CreatedAt time.Time `json:"created_at"`
 	// Login proof stays server-side and is rechecked under the user lock.
 	loginHash   string
 	loginEmail  string
@@ -254,11 +255,11 @@ func (s *Store) Bootstrap(ctx context.Context, email, password, name string) err
 	return tx.Commit(ctx)
 }
 
-const userColumns = "id,email,name,balance,frozen,service_fee,role,disabled"
+const userColumns = "id,email,name,balance,frozen,service_fee,role,disabled,created_at"
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Balance, &u.Frozen, &u.ServiceFee, &u.Role, &u.Disabled)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.Balance, &u.Frozen, &u.ServiceFee, &u.Role, &u.Disabled, &u.CreatedAt)
 	u.Permissions = Permissions(u.Role)
 	return u, err
 }

@@ -79,6 +79,8 @@ func New(db *store.Store, secure bool) http.Handler {
 	s.announcementRoutes(m)
 	s.riskRoutes(m)
 	s.siteRoutes(m)
+	s.partnerRoutes(m)
+	s.sliderRoutes(m)
 	s.brandingRoutes(m)
 	s.customMenuRoutes(m)
 	// Unknown API routes must never return an HTML 200 response.
@@ -265,8 +267,9 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		SliderProof string `json:"slider_proof"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -284,6 +287,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	meta.Observation.Account = safeLoginAccount(email)
 	identity := store.RiskIdentity{Type: "login", ID: email, Label: meta.Observation.Account}
 	if !s.applyRiskChecks(w, r, []store.RiskConsumption{{Rule: "login", Policy: meta.Config.Rules["login"], Identity: identity}}) {
+		return
+	}
+	if e := s.DB.ConsumeLoginSlider(r.Context(), sliderBinding(r), body.SliderProof); e != nil {
+		s.result(w, nil, e)
 		return
 	}
 	u, err := s.DB.Login(r.Context(), body.Email, body.Password)

@@ -16,7 +16,7 @@ type siteMenu struct {
 	OpenInNewTab bool   `json:"open_in_new_tab,omitempty"`
 }
 
-var customerMenus = []siteMenu{{Key: "overview", Label: "总览", Icon: "LayoutDashboard"}, {Key: "refunds", Label: "申请记录", Icon: "FileText"}, {Key: "billing", Label: "资金与账单", Icon: "Wallet"}, {Key: "developer", Label: "接口接入", Icon: "CodeXml"}, {Key: "announcements", Label: "公告中心", Icon: "Bell"}, {Key: "help", Label: "使用指南", Icon: "CircleHelp"}}
+var customerMenus = []siteMenu{{Key: "partners", Label: "伙伴计划", Icon: "Users"}, {Key: "overview", Label: "总览", Icon: "LayoutDashboard"}, {Key: "refunds", Label: "申请记录", Icon: "FileText"}, {Key: "billing", Label: "资金与账单", Icon: "Wallet"}, {Key: "developer", Label: "接口接入", Icon: "CodeXml"}, {Key: "announcements", Label: "公告中心", Icon: "Bell"}, {Key: "help", Label: "使用指南", Icon: "CircleHelp"}}
 
 func enabledMenus(v store.SiteSettings) []siteMenu {
 	out := []siteMenu{}
@@ -51,7 +51,7 @@ func (s *Server) siteRoutes(m *http.ServeMux) {
 			s.result(w, nil, e)
 			return
 		}
-		respond(w, 200, map[string]any{"branding": v.Branding, "menus": enabledMenus(v), "registration_enabled": v.Security.RegistrationEnabled, "email_verification_enabled": v.Security.EmailVerificationEnabled, "email_domains": v.Security.EmailDomains, "password_reset_enabled": v.Mail.Ready()})
+		respond(w, 200, map[string]any{"branding": v.Branding, "menus": enabledMenus(v), "registration_enabled": v.Security.RegistrationEnabled, "email_verification_enabled": v.Security.EmailVerificationEnabled, "email_domains": v.Security.EmailDomains, "password_reset_enabled": v.Mail.Ready(), "login_slider_enabled": v.Security.LoginSliderEnabled})
 	})
 	m.Handle("GET /api/workspace/navigation", s.auth(false, func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.DB.SiteSettings(r.Context())
@@ -178,6 +178,8 @@ func (s *Server) emailRate(w http.ResponseWriter, r *http.Request, email, operat
 // feature cannot be recovered by editing the DOM or replaying a captured call.
 func featureForPath(path string) []string {
 	switch {
+	case path == "/api/partners":
+		return []string{"partners"}
 	case path == "/api/dashboard":
 		return []string{"overview"}
 	case path == "/api/refunds" || strings.HasPrefix(path, "/api/refunds/"):

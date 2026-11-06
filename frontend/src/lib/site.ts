@@ -5,6 +5,7 @@ export interface CustomMenu {
 }
 export interface SiteBranding { icon_url:string; customized:boolean }
 export interface PublicSite {
+ login_slider_enabled?:boolean;
  branding:SiteBranding;
  menus:SiteMenu[];
  registration_enabled:boolean;
