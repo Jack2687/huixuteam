@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import Icon from './Icon.vue';
+import { serviceEligibilityNotice } from '../lib/service-eligibility';
 import { money, type User, type Dashboard } from '../lib/api';
 const props=defineProps<{user:User;data:Dashboard;allowRefunds:boolean;allowBilling:boolean}>();
 const emit=defineEmits<{create:[];billing:[]}>();
@@ -8,7 +9,7 @@ const metrics=[{key:'total',label:'申请总数',icon:'FileText',note:'累计服
 const max=computed(()=>Math.max(1,...props.data.trend.map(t=>t.count)));
 </script>
 <template>
- <section class="service-terms-callout" aria-label="费用结算与申请说明"><Icon name="CircleHelp" :size="26"/><p>费用按服务办理结果结算，不以退款到账为依据。申请尚未开始时可撤回，开始后可在详情跟踪。</p></section>
+ <section class="service-terms-callout" aria-label="费用结算与申请说明"><Icon name="CircleHelp" :size="26"/><div><p>费用按服务办理结果结算，不以退款到账为依据。申请尚未开始时可撤回，开始后可在详情跟踪。</p><p class="service-eligibility">{{serviceEligibilityNotice}}</p></div></section>
  <div class="metric-grid"><section v-for="(metric,index) in metrics" :key="metric.key" class="metric-card"><div><span>{{metric.label}}</span><Icon :name="metric.icon" :size="18"/></div><strong>{{data.counts[metric.key]||0}}<small>笔</small></strong><p><span class="metric-index">0{{index+1}}</span>{{metric.note}}</p></section></div>
  <div class="overview-workbench">
   <section class="activity-card"><div class="chart-heading"><div><span class="eyebrow">ACTIVITY / 14 DAYS</span><h3>最近的申请节奏</h3></div><span class="chart-legend"><i/>每日提交量</span></div><div class="chart" role="img" aria-label="近十四天的每日申请数量"><div v-for="(day,index) in data.trend" :key="day.date" class="chart-column" tabindex="0" :aria-label="`${day.date}，${day.count} 笔`"><span class="chart-tooltip">{{day.date}} · {{day.count}} 笔</span><div class="chart-bar" :class="{current:index===data.trend.length-1}" :style="{height:`${Math.max(2,(day.count/max)*88)}%`}"/><small>{{index%2===0||index===data.trend.length-1?day.date.slice(5).replace('-','/'):''}}</small></div></div><div class="chart-footnote">按申请提交日期统计，记录以账户实际数据为准。</div></section>
@@ -20,5 +21,6 @@ const max=computed(()=>Math.max(1,...props.data.trend.map(t=>t.count)));
 .service-terms-callout{display:flex;align-items:flex-start;gap:16px;padding:24px 26px;margin-bottom:24px;border:1px solid #ecc3a6;border-left:5px solid #b54e26;border-radius:6px;background:#fff2e5;color:#963b1b}
 .service-terms-callout>svg{flex-shrink:0;margin-top:6px}
 .service-terms-callout p{margin:0;font-size:clamp(19px,1.65vw,26px);font-weight:700;line-height:1.75;letter-spacing:.3px}
+.service-terms-callout .service-eligibility{margin-top:14px;padding-top:14px;border-top:1px solid #ecc3a6}
 @media(max-width:640px){.service-terms-callout{padding:18px 16px;gap:10px}.service-terms-callout>svg{width:20px;height:20px}}
 </style>

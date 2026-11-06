@@ -173,7 +173,7 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 	call("PUT", "/api/admin/site-settings/features", string(raw), ad, 200)
 	call("GET", "/api/refunds", "", mem, 200)
 	// Public auth endpoints must enforce settings without trusting the UI.
-	call("POST", "/api/auth/register", `{"email":"blocked@test.invalid","name":"User","password":"LongTestPassword123"}`, "", 403)
+	call("POST", "/api/auth/register", `{"service_eligibility_accepted":true,"email":"blocked@test.invalid","name":"User","password":"LongTestPassword123"}`, "", 403)
 	call("PUT", "/api/admin/site-settings/security", `{"registration_enabled":true,"email_verification_enabled":true,"email_domains":[]}`, ad, 400)
 	sink := testutil.SMTP(t)
 	mail := store.MailInput{SiteMail: store.SiteMail{Host: sink.Host, Port: sink.Port, FromEmail: "mail@test.invalid", FromName: "QA", Encryption: "none"}}
@@ -187,9 +187,24 @@ func TestSiteSettingsHTTPBoundaryAndEmailFlow(t *testing.T) {
 		t.Fatal(worked, e)
 	}
 	code := sink.Code(t)
-	raw, _ = json.Marshal(map[string]string{"email": "fresh@test.invalid", "name": "Fresh", "password": "LongTestPassword123", "code": code, "role": "admin"})
+	// A valid email code must not be consumed by missing/false/invalid confirmation.
+	registration := map[string]any{"email": "fresh@test.invalid", "name": "Fresh", "password": "LongTestPassword123", "code": code}
+	for _, value := range []any{nil, false, "true", 1} {
+		if value == nil {
+			delete(registration, "service_eligibility_accepted")
+		} else {
+			registration["service_eligibility_accepted"] = value
+		}
+		body, _ := json.Marshal(registration)
+		call("POST", "/api/auth/register", string(body), "", 400)
+	}
+	var count int
+	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM users WHERE email='fresh@test.invalid'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("unconfirmed registration created a user", err)
+	}
+	raw, _ = json.Marshal(map[string]any{"service_eligibility_accepted": true, "email": "fresh@test.invalid", "name": "Fresh", "password": "LongTestPassword123", "code": code, "role": "admin"})
 	call("POST", "/api/auth/register", string(raw), "", 400)
-	raw, _ = json.Marshal(map[string]string{"email": "fresh@test.invalid", "name": "Fresh", "password": "LongTestPassword123", "code": code})
+	raw, _ = json.Marshal(map[string]any{"service_eligibility_accepted": true, "email": "fresh@test.invalid", "name": "Fresh", "password": "LongTestPassword123", "code": code})
 	call("POST", "/api/auth/register", string(raw), "", 201)
 	resetReq := `{"email":"fresh@test.invalid","purpose":"reset"}`
 	call("POST", "/api/auth/email-code", resetReq, "", 202)

@@ -168,14 +168,18 @@ func (s *Store) verifyCodeTx(ctx context.Context, tx pgx.Tx, email, purpose, cod
 }
 
 type RegistrationInput struct {
-	Invite   string `json:"invite"`
-	Email    string `json:"email"`
-	Name     string `json:"name"`
-	Password string `json:"password"`
-	Code     string `json:"code"`
+	ServiceEligibilityAccepted bool   `json:"service_eligibility_accepted"`
+	Invite                     string `json:"invite"`
+	Email                      string `json:"email"`
+	Name                       string `json:"name"`
+	Password                   string `json:"password"`
+	Code                       string `json:"code"`
 }
 
 func (s *Store) Register(ctx context.Context, v RegistrationInput) error {
+	if !v.ServiceEligibilityAccepted {
+		return invalid("请先确认你有退款办理经验，并以业务用户身份使用本平台；暂不接受个人用户")
+	}
 	var e error
 	v.Email, e = normalizeEmail(v.Email)
 	if e != nil {

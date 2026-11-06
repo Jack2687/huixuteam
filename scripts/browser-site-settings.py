@@ -151,6 +151,7 @@ try:
     fill('显示名称', '邮箱注册验收用户'); fill('账户邮箱', address)
     click('获取验证码'); registration_code = code()
     fill('邮箱验证码', registration_code); fill('设置密码', password); fill('确认密码', password)
+    batch(['check','input[name="service_eligibility_accepted"]'])
     shot('registration')
     click('创建账户'); expect('注册成功')
     fill('账户密码', password); click('进入服务台'); expect('邮箱注册验收用户')

@@ -3,6 +3,7 @@ import DataProtectionNotice from "./components/DataProtectionNotice.vue";
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 import Brand from "./components/Brand.vue";
 import AccountAccess from "./components/AccountAccess.vue";
+import { serviceEligibilityNotice } from "./lib/service-eligibility";
 import type { PublicSite, SiteMenu } from "./lib/site";
 import { applyBranding, branding } from "./lib/branding";
 const Announcements=defineAsyncComponent(()=>import("./components/Announcements.vue"));
@@ -235,6 +236,7 @@ onUnmounted(() => {
  <div v-else-if="!user" class="login-page">
   <section class="login-art"><Brand/>
    <div class="login-copy"><span class="eyebrow">HUIXU / SERVICE DESK</span><h1>让每一笔申请，<br/>都有迹可循<span>。</span></h1><p>提交资料、查看进度、管理费用。<br/>回序，为你的服务流程留下一份清楚的记录。</p>
+    <aside class="login-eligibility" aria-label="使用对象说明"><Icon name="CircleAlert" :size="24"/><div><strong>使用前请确认</strong><p>{{serviceEligibilityNotice}}</p></div></aside>
     <div class="login-process"><div><span>01</span><strong>提交申请</strong><small>单笔录入或批量导入</small></div><div><span>02</span><strong>跟踪进展</strong><small>服务状态持续更新</small></div><div><span>03</span><strong>核对账单</strong><small>费用与记录逐笔对应</small></div></div>
    </div><footer>回序 HUIXU <span>© {{new Date().getFullYear()}}</span></footer>
   </section>
@@ -276,3 +278,8 @@ onUnmounted(() => {
  </div>
  <div v-if="toast" class="toast" role="status"><Icon name="Check" :size="16"/>{{toast}}<button aria-label="收起消息" @click="toast=''"><Icon name="X" :size="15"/></button></div>
 </template>
+<style scoped>
+.login-eligibility{display:flex;gap:14px;align-items:flex-start;margin-top:30px;padding:20px;border:1px solid #d8ab79;border-left:4px solid #edba7c;border-radius:8px;background:#3d4030;color:#fff0d7}
+.login-eligibility>svg{flex-shrink:0;margin-top:2px;color:#ffd18f}.login-eligibility strong{font-size:13px;letter-spacing:1px;color:#ffd18f}.login-eligibility p{margin:9px 0 0;font-size:clamp(16px,1.4vw,21px);font-weight:600;line-height:1.8}
+@media(max-width:640px){.login-eligibility{margin-top:22px;padding:16px;gap:10px}.login-eligibility p{font-size:15px}}
+</style>

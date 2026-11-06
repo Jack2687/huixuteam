@@ -57,7 +57,7 @@ func TestSiteEmailRegistrationAndReset(t *testing.T) {
 	if e = s.RequestEmailCode(ctx, email, "register"); !errors.Is(e, store.ErrAuthRate) {
 		t.Fatal("resend cooldown missing", e)
 	}
-	in := store.RegistrationInput{Email: email, Name: "New member", Password: "LongTestPassword123", Code: "bad"}
+	in := store.RegistrationInput{ServiceEligibilityAccepted: true, Email: email, Name: "New member", Password: "LongTestPassword123", Code: "bad"}
 	if e = s.Register(ctx, in); !errors.Is(e, store.ErrInvalid) {
 		t.Fatal("accepted invalid code", e)
 	}
@@ -128,7 +128,7 @@ func TestEmailVerificationLimitsAndConfigurationChanges(t *testing.T) {
 	ctx := context.Background()
 	email := "limited@test.invalid"
 	code := sendCode(t, s, sink, email, "register")
-	in := store.RegistrationInput{Email: email, Name: "Test", Password: "LongTestPassword123", Code: "invalid"}
+	in := store.RegistrationInput{ServiceEligibilityAccepted: true, Email: email, Name: "Test", Password: "LongTestPassword123", Code: "invalid"}
 	for i := 0; i < 5; i++ {
 		if e := s.Register(ctx, in); !errors.Is(e, store.ErrInvalid) {
 			t.Fatal(e)
@@ -183,7 +183,7 @@ func TestConcurrentRegistrationConsumesOneCode(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- s.Register(ctx, store.RegistrationInput{Email: email, Name: "Race", Password: "LongTestPassword123", Code: code})
+			errs <- s.Register(ctx, store.RegistrationInput{ServiceEligibilityAccepted: true, Email: email, Name: "Race", Password: "LongTestPassword123", Code: code})
 		}()
 	}
 	wg.Wait()
@@ -292,7 +292,7 @@ func TestSiteSettingsAndPendingMailPersistAcrossStartup(t *testing.T) {
 		t.Fatal("pending mail lost after startup", worked, e)
 	}
 	code := sink.Code(t)
-	if e = reopened.Register(ctx, store.RegistrationInput{Email: "restart@test.invalid", Name: "Restart", Password: "LongTestPassword123", Code: code}); e != nil {
+	if e = reopened.Register(ctx, store.RegistrationInput{ServiceEligibilityAccepted: true, Email: "restart@test.invalid", Name: "Restart", Password: "LongTestPassword123", Code: code}); e != nil {
 		t.Fatal("code lost after startup", e)
 	}
 }

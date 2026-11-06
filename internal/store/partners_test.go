@@ -96,14 +96,14 @@ func TestPartnerRegistrationBindingAndCreatedAt(t *testing.T) {
 	}
 	var code string
 	s.Pool.QueryRow(ctx, "SELECT invite_code FROM users WHERE id=$1", owner.ID).Scan(&code)
-	if e := s.Register(ctx, store.RegistrationInput{Email: "guest@test.invalid", Name: "Guest", Password: "LongTestPassword123!", Invite: code}); e != nil {
+	if e := s.Register(ctx, store.RegistrationInput{ServiceEligibilityAccepted: true, Email: "guest@test.invalid", Name: "Guest", Password: "LongTestPassword123!", Invite: code}); e != nil {
 		t.Fatal(e)
 	}
 	var bound string
 	if e := s.Pool.QueryRow(ctx, "SELECT invited_by FROM users WHERE email='guest@test.invalid'").Scan(&bound); e != nil || bound != owner.ID {
 		t.Fatal(bound, e)
 	}
-	if e := s.Register(ctx, store.RegistrationInput{Email: "invalid@test.invalid", Name: "Guest", Password: "LongTestPassword123!", Invite: "invalid"}); !errors.Is(e, store.ErrInvalid) {
+	if e := s.Register(ctx, store.RegistrationInput{ServiceEligibilityAccepted: true, Email: "invalid@test.invalid", Name: "Guest", Password: "LongTestPassword123!", Invite: "invalid"}); !errors.Is(e, store.ErrInvalid) {
 		t.Fatal(e)
 	}
 	var id string

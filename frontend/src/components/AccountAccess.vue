@@ -5,15 +5,17 @@ import LoginSlider from './LoginSlider.vue';
 const slider=ref<InstanceType<typeof LoginSlider>|null>(null),sliderProof=ref(''),invite=ref(new URLSearchParams(location.search).get('invite')||'');
 import { api, type User } from '../lib/api';
 import type { PublicSite } from '../lib/site';
+import { serviceEligibilityConfirmation } from '../lib/service-eligibility';
 const props=defineProps<{site:PublicSite;sessionError:string}>();
 const emit=defineEmits<{login:[user:User]}>();
 const mode=ref<'login'|'register'|'reset'>('login');
 const email=ref(''),password=ref(''),confirmation=ref(''),name=ref(''),code=ref('');
+const serviceEligibilityAccepted=ref(false);
 const busy=ref(false),sending=ref(false),error=ref(''),message=ref(''),seconds=ref(0);
 const title=computed(()=>({login:'登录回序',register:'创建服务账户',reset:'重置账户密码'})[mode.value]);
 const needsCode=computed(()=>mode.value==='reset'||mode.value==='register'&&props.site.email_verification_enabled);
 let timer:ReturnType<typeof setInterval>|undefined;
-function switchMode(value:typeof mode.value){mode.value=value;password.value='';confirmation.value='';code.value='';error.value='';message.value='';}
+function switchMode(value:typeof mode.value){mode.value=value;password.value='';confirmation.value='';code.value='';error.value='';message.value='';serviceEligibilityAccepted.value=false;}
 watch(()=>props.site,()=>{if(mode.value==='register'&&!props.site.registration_enabled||mode.value==='reset'&&!props.site.password_reset_enabled)switchMode('login')});
 async function sendCode(){
  if(!email.value||busy.value||sending.value||seconds.value)return;
@@ -26,6 +28,7 @@ async function sendCode(){
 }
 async function submit(){
  if(busy.value||sending.value)return;error.value='';message.value='';
+ if(mode.value==='register'&&!serviceEligibilityAccepted.value){error.value='请先确认你有退款办理经验，并以业务用户身份使用本平台';return}
  const bytes=(value:string)=>new TextEncoder().encode(value).length;
  if(mode.value!=='login'&&(bytes(password.value)<12||bytes(password.value)>72)){error.value='密码须为 12～72 字节，中文和表情占多个字节';return}
  if(mode.value==='register'&&(bytes(name.value.trim())<1||bytes(name.value.trim())>80)){error.value='显示名称须为 1～80 字节';return}
@@ -36,7 +39,7 @@ async function submit(){
    const user=await api<User>('/api/auth/login',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,slider_proof:sliderProof.value})});password.value='';emit('login',user);
   }else{
    const register=mode.value==='register';
-   await api(register?'/api/auth/register':'/api/auth/reset-password',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,code:code.value,...(register?{name:name.value,invite:invite.value}:{})})});
+   await api(register?'/api/auth/register':'/api/auth/reset-password',{method:'POST',body:JSON.stringify({email:email.value,password:password.value,code:code.value,...(register?{name:name.value,invite:invite.value,service_eligibility_accepted:serviceEligibilityAccepted.value}:{})})});
    switchMode('login');message.value=register?'注册成功，请使用新账号登录。':'密码已重置，旧登录和 API 密钥已失效，请重新登录。';
   }
  }catch(e){error.value=(e as Error).message;if(mode.value==='login')void slider.value?.reset()}finally{busy.value=false}
@@ -54,12 +57,15 @@ onUnmounted(()=>clearInterval(timer));
    <label v-if="mode!=='login'">确认密码<input v-model="confirmation" type="password" autocomplete="new-password" minlength="1" maxlength="72" required placeholder="再次输入密码"/></label>
    <p v-if="error||(mode==='login'&&sessionError)" class="form-error" role="alert">{{error||sessionError}}</p><p v-if="message" class="auth-message" role="status">{{message}}</p>
    <label v-if="mode==='register'">邀请标识（选填）<input v-model="invite" maxlength="80" placeholder="来自伙伴的邀请标识"/></label>
+   <label v-if="mode==='register'" class="eligibility-confirmation"><input v-model="serviceEligibilityAccepted" name="service_eligibility_accepted" type="checkbox" required :disabled="busy||sending"/><span>{{serviceEligibilityConfirmation}}</span></label>
    <LoginSlider v-if="mode==='login'&&site.login_slider_enabled!==false" ref="slider" @verified="sliderProof=$event"/>
-   <button class="button primary full" :disabled="busy||sending"><span>{{busy?'正在处理…':mode==='login'?'进入服务台':mode==='register'?'创建账户':'确认重置密码'}}</span><Icon :name="busy?'LoaderCircle':'ArrowUpRight'" :class="{spin:busy}"/></button>
+   <button class="button primary full" :disabled="busy||sending||(mode==='register'&&!serviceEligibilityAccepted)"><span>{{busy?'正在处理…':mode==='login'?'进入服务台':mode==='register'?'创建账户':'确认重置密码'}}</span><Icon :name="busy?'LoaderCircle':'ArrowUpRight'" :class="{spin:busy}"/></button>
   </form>
   <div class="auth-links"><template v-if="mode==='login'"><button v-if="site.registration_enabled" type="button" :disabled="busy||sending" @click="switchMode('register')">注册新账户</button><span v-else>没有账户？请联系服务人员。</span><button v-if="site.password_reset_enabled" type="button" :disabled="busy||sending" @click="switchMode('reset')">忘记密码？</button></template><button v-else type="button" :disabled="busy||sending" @click="switchMode('login')">返回登录</button></div>
  </div>
 </template>
 <style scoped>
+.account-access .eligibility-confirmation{display:flex;align-items:flex-start;gap:10px;padding:14px;border:1px solid #e6c6a8;border-radius:6px;background:#fff6e9;color:#843d21;line-height:1.8;cursor:pointer}
+.account-access .eligibility-confirmation input{height:17px;width:17px;flex:0 0 17px;margin:3px 0 0;padding:0;accent-color:#963b1b}.eligibility-confirmation span{min-width:0}
 .code-row{display:flex;gap:10px}.code-row input{min-width:0;flex:1}.code-row .button{white-space:nowrap;font-size:12px;padding:10px}.auth-links{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-top:24px;color:var(--accent)}.auth-links span{color:var(--muted)}.auth-message{font-size:12px;color:#3c6548;line-height:1.7;background:#eaf0e4;padding:12px;border-radius:6px}.field-help{font-size:11px;color:var(--muted);overflow-wrap:anywhere;margin-top:-10px}.account-access>p{font-size:12px;color:var(--muted)}
 </style>

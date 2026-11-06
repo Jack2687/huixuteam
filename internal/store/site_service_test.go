@@ -30,7 +30,12 @@ func TestRegistrationServicePriceConfiguration(t *testing.T) {
 	}
 	register := func(email string, want int64) {
 		t.Helper()
-		in := store.RegistrationInput{Email: email, Name: "QA", Password: "TestPassword-12345"}
+		in := store.RegistrationInput{ServiceEligibilityAccepted: true, Email: email, Name: "QA", Password: "TestPassword-12345"}
+		in.ServiceEligibilityAccepted = false
+		if err := s.Register(ctx, in); !errors.Is(err, store.ErrInvalid) {
+			t.Fatal("registration without eligibility confirmation accepted", err)
+		}
+		in.ServiceEligibilityAccepted = true
 		if err := s.Register(ctx, in); err != nil {
 			t.Fatal(err)
 		}
