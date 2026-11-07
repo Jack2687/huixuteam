@@ -19,6 +19,14 @@ def session(team="target-team", email="child@example.com"):
 
 
 class MergeV2ProtocolTests(unittest.TestCase):
+    def test_workspace_conflict_only_retries_known_stale_session(self):
+        for code,retry in [('invalid_session',True),('invalid_auth_step',True),('token_expired',True),('workspace_full',False),('unknown',False),('',False)]:
+            f=self.flow();response=Mock(status=409);response.json.return_value={'error':{'code':code,'message':'private-secret'}}
+            with self.subTest(code=code),patch.object(f,'request',return_value=response):
+                with self.assertRaises(upstream.LoginFlowError) as e:f.submit_workspace_and_org('https://auth.openai.com/workspace')
+                self.assertEqual(e.exception.code,'workspace_conflict');self.assertEqual(e.exception.retryable,retry)
+                self.assertNotIn('private-secret',str(e.exception))
+
     def flow(self):
         f=merge_v2.TeamProtocolLogin("fixture",{"email":"child@example.com","credential_mode":"chatgpt_at","proxy":"http://user:secret@proxy.invalid:8080","merge_v2":{"team_id":"target-team"}})
         self.addCleanup(f.close)

@@ -86,6 +86,8 @@ var recoveryReasons = map[string]string{
 	"fallback_free":                "个人套餐已核验为 Free，按配置完成服务",
 	"mother_preflight_auth":        "服务资源授权已失效，尚未开始办理",
 	"mother_preflight_failed":      "服务资源连接未通过，尚未开始办理",
+	"mother_capacity":              "对应席位暂不可用，等待资源重新调度",
+	"workspace_conflict":           "选择团队发生冲突，按具体原因处理",
 	"export_uncertain":             "处理结果未明确，正在核实",
 	"export_rejected":              "本次请求未受理",
 	"export_not_sent":              "连接未建立，请求尚未发送",

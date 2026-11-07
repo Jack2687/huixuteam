@@ -230,10 +230,35 @@ class MotherClient:
         # Always before the first invitation checkpoint. This GET cannot create
         # an invitation; a failure here is safe to return to the shared queue.
         try:
-            self.find("users")
+            member = self.find("users")
+            if member is None:
+                self.check_capacity()
         except UpstreamFailure as exc:
-            code = "mother_preflight_auth" if exc.status == 401 else "mother_preflight_failed"
+            code = "mother_capacity" if exc.code == "mother_capacity" else "mother_preflight_auth" if exc.status == 401 else "mother_preflight_failed"
             raise UpstreamFailure(code, exc.status, exc.network_code, exc.retry_after_seconds) from None
+
+    def check_capacity(self):
+        from resource_probe import capacity
+        started = time.monotonic()
+        diagnostics.request_event("mother_capacity", "start", side="mother")
+        try:
+            response = self.session.get("https://chatgpt.com/backend-api/subscriptions?" + urlencode({"account_id": self.mother["team_id"]}),
+                                        headers=self.headers, timeout=12, allow_redirects=False)
+        except Exception as exc:
+            diagnostics.request_event("mother_capacity", "error", side="mother", exc=exc, started=started)
+            raise UpstreamFailure("mother_network", network_code=getattr(exc, "code", 0)) from None
+        diagnostics.request_event("mother_capacity", "response", side="mother", response=response, started=started)
+        if response.status_code != 200:
+            raise UpstreamFailure("mother_http", response.status_code, operation="mother_capacity")
+        try:
+            seats = capacity(response.json())
+        except (ValueError, TypeError):
+            seats = None
+        kind = "standard" if self.mother["seat_type"] == "default" else "premium"
+        if not seats or kind not in seats:
+            raise UpstreamFailure("mother_shape", operation="mother_capacity")
+        if seats[kind]["remaining"] < 1:
+            raise UpstreamFailure("mother_capacity", 200, operation="mother_capacity")
 
     def remove(self, child_id):
         self.child_id = child_id or self.child_id
@@ -255,6 +280,12 @@ class MotherClient:
         if row is not None:
             identity = child_id or str(row.get("user_id") or row.get("id") or "")
             self.remove(identity)
+        self.cleanup_invitation(child_id)
+        self.confirm_removed()
+
+    def cleanup_invitation(self, child_id):
+        # Accepted and unaccepted orders both need scoped invitation cleanup.
+        # A residual invitation can let a removed customer rejoin the team.
         invitation = self.find("invites")
         if invitation is not None:
             email = str(invitation.get("email") or invitation.get("email_address") or "").casefold()
@@ -276,7 +307,6 @@ class MotherClient:
                 if failure is not None:
                     raise failure
                 raise UpstreamFailure("cleanup_invite_pending")
-        self.confirm_removed()
 
 
 def execute(job, checkpoint=rpc, mother_factory=MotherClient, login_factory=CustomerLogin, sleep=time.sleep):
@@ -374,7 +404,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
                         checkpoint("cleanup_completed")
                         return {"ok": True}
                     retry = (isinstance(exc, upstream.LoginFlowError) and exc.retryable) or upstream._is_transient_login_error(str(exc))
-                    code = exc.code if isinstance(exc, upstream.LoginFlowError) and exc.code in {"login_auth_failed", "login_response_incomplete", "team_session_expired", "extra_verification"} else "login_failed"
+                    code = exc.code if isinstance(exc, upstream.LoginFlowError) and exc.code in {"login_auth_failed", "login_response_incomplete", "team_session_expired", "extra_verification", "workspace_conflict"} else "login_failed"
                     result = {"success": False, "retryable": retry, "error_code": code, **diagnostics.failure(exc, diagnostics.stage(getattr(flow, "last_stage", "")), flow=flow)}
                 finally:
                     if flow is not None:
@@ -390,6 +420,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
             return {"ok": False, "code": "export_uncertain"}
         checkpoint("removing")
         mother.remove(child_id)
+        mother.cleanup_invitation(child_id)
         # Recovery config controls subsequent attempts, never success evidence.
         mother.confirm_removed()
         checkpoint("completed")
