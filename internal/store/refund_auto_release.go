@@ -13,12 +13,8 @@ const autoUnconfirmedMessage = "本次申请未能确认最终结果，已结束
 // errors, ambiguous cleanup and worker failures cannot establish that cause.
 func motherFailure(d RefundDiagnostic) bool {
 	switch d.Code {
-	case "mother_preflight_auth", "mother_preflight_failed", "mother_capacity", "mother_network", "mother_shape", "mother_pagination":
+	case "mother_preflight_auth", "mother_preflight_failed", "mother_network", "mother_shape", "mother_pagination":
 		return true
-	case "cleanup_pending", "cleanup_invite_pending":
-		// A confirmed residual member/invitation still occupies this resource.
-		// This is only evaluated after all configured cleanup attempts expire.
-		return d.Evidence != nil && d.Evidence.Side == "mother" && d.Evidence.Stage == "mother_operation"
 	case "mother_invite_auth":
 		return d.HTTPStatus == 401 && d.Evidence != nil && d.Evidence.Side == "mother" && d.Evidence.Stage == "invite_send"
 	case "mother_http":

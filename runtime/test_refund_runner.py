@@ -10,43 +10,6 @@ from manager_oauth import bridge
 
 
 class RunnerTests(unittest.TestCase):
-    def test_preflight_capacity_is_read_only_and_checks_selected_seat(self):
-        with patch.object(runner.requests, 'Session'):
-            c=runner.MotherClient(self.job());c.find=Mock(return_value=None)
-            def response(available):
-                return Mock(status_code=200,headers={},text='{}',json=lambda:{'seat_capacity':[{'type':'default','paid':2,'held':0,'available':available},{'type':'prolite','paid':2,'held':0,'available':2}]})
-            c.session.get.return_value=response(0)
-            with self.assertRaises(runner.UpstreamFailure) as error:c.preflight()
-            self.assertEqual(error.exception.code,'mother_capacity')
-            c.session.request.assert_not_called()
-            c.session.get.return_value=response(1);c.preflight()
-            c.mother['seat_type']='prolite';c.session.get.return_value=response(0);c.preflight()
-            c.session.get.reset_mock();c.find.return_value={'id':'child-user'};c.preflight()
-            c.session.get.assert_not_called()
-
-    def test_accepted_cleanup_revokes_residual_invitation_without_reexport(self):
-        with patch.object(runner.requests,'Session'):
-            c=runner.MotherClient(self.job('accepted'));actions=[];member=True;invite=True
-            def find(collection):
-                exists=member if collection=='users' else invite
-                return {'id':'child-user' if collection=='users' else 'invitation','email':'child@example.com','role':'standard-user'} if exists else None
-            def call(method,path,body=None):
-                nonlocal member,invite
-                actions.append((method,path,body))
-                if path=='/users/child-user':member=False
-                elif path=='/invites':invite=False
-                else:self.fail('unexpected mutation')
-            c.find=Mock(side_effect=find);c.call=Mock(side_effect=call);login=Mock();steps=[]
-            result=runner.execute(self.job('accepted'),lambda k,*_:steps.append(k),lambda _:c,login)
-            self.assertTrue(result['ok']);login.assert_not_called()
-            self.assertEqual(actions,[('DELETE','/users/child-user',None),('DELETE','/invites',{'email_address':'child@example.com'})])
-            self.assertIn('completed',steps)
-
-    def test_accepted_cleanup_keeps_pending_if_invite_survives(self):
-        m=Mock();m.cleanup_invitation.side_effect=runner.UpstreamFailure('cleanup_invite_pending');steps=[]
-        result=runner.execute(self.job('accepted'),lambda k,*_:steps.append(k),lambda _:m)
-        self.assertEqual(result['code'],'cleanup_invite_pending');self.assertNotIn('completed',steps)
-
     def test_only_invite_post_401_has_invitation_authorization_code(self):
         for method, path, status, expected, operation in [
             ('POST', '/invites', 401, 'mother_invite_auth', 'invite_send'),

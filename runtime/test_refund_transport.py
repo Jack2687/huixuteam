@@ -120,11 +120,6 @@ class ProxyFlow:
         data = json.loads(raw) if raw and headers.get("Content-Type", "").startswith("application/json") else {}
         team = self.job["mother"]["team_id"]
         email = self.job["account"]["email"]
-        if path == "/backend-api/subscriptions":
-            assert role == "mother" and method == "GET"
-            assert parse_qs(url.query)['account_id'] == [team]
-            assert headers['Authorization'] == 'Bearer '+self.job['mother']['access_token']
-            return 200, {'seat_capacity':[{'type':'default','paid':2,'held':0,'available':1}]}, {}
         if path == "/backend-api/accounts/check/v4-2023-04-27":
             assert role == "child" and method == "GET"
             assert headers["Authorization"] in {"Bearer " + self.token, "Bearer " + self.personal_token}

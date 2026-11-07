@@ -38,14 +38,6 @@ class TeamProtocolLogin(ProjectProtocolLogin):
         if resp.status in {301, 302, 303, 307, 308} and resp.location():
             return urljoin(url, resp.location())
         if resp.status != 200:
-            if resp.status == 409:
-                data = resp.json()
-                error = data.get("error") if isinstance(data, dict) else None
-                code = error.get("code", "") if isinstance(error, dict) else ""
-                # Only known stale-session conflicts request another login.
-                # Capacity/permission/unknown conflicts must not loop blindly.
-                retry = code in {"invalid_session", "invalid_auth_step", "token_expired"}
-                raise upstream.LoginFlowError("Team selection conflict", code="workspace_conflict", status=409, retryable=retry)
             raise RuntimeError(f"选择目标团队失败：HTTP {resp.status}")
         next_url = self.extract_continue_url(resp.json())
         if not next_url:

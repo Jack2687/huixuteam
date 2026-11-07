@@ -21,7 +21,7 @@ func (v MotherFailoverSettings) Validate() error {
 // Only the initial, read-only preflight can release a reservation for switching.
 // Inviting and all later stages may have upstream effects and cannot use this path.
 func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step string, d RefundDiagnostic) (bool, error) {
-	if step != "assigned" || !oneOf(d.Code, "mother_preflight_auth", "mother_preflight_failed", "mother_capacity") {
+	if step != "assigned" || !oneOf(d.Code, "mother_preflight_auth", "mother_preflight_failed") {
 		return false, nil
 	}
 	var untouched bool
@@ -42,7 +42,7 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 	// A temporary outage must not exclude every configured mother forever.
 	// Keep the same switch budget and queue delay; prefer another free mother,
 	// but allow the original resource to be rechecked after the cooldown.
-	temporary := d.Code == "mother_capacity" || d.Code == "mother_preflight_failed" && (d.HTTPStatus == 408 || d.HTTPStatus == 429 ||
+	temporary := d.Code == "mother_preflight_failed" && (d.HTTPStatus == 408 || d.HTTPStatus == 429 ||
 		d.HTTPStatus == 500 || d.HTTPStatus == 502 || d.HTTPStatus == 503 || d.HTTPStatus == 504 ||
 		(d.HTTPStatus == 0 && (d.NetworkCode == 5 || d.NetworkCode == 6 || d.NetworkCode == 7 ||
 			d.NetworkCode == 28 || d.NetworkCode == 35 || d.NetworkCode == 52 || d.NetworkCode == 55 || d.NetworkCode == 56)))
