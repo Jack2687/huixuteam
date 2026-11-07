@@ -97,6 +97,7 @@ var recoveryReasons = map[string]string{
 	"account_unavailable":          "账号当前不可用",
 	"mother_network":               "服务连接未完成",
 	"mother_http":                  "服务请求未完成",
+	"mother_invite_auth":           "母号邀请授权未通过，清理确认后重新调度",
 	"mother_shape":                 "服务查询结果无法确认",
 	"mother_pagination":            "服务查询结果不完整",
 	"mother_identity":              "服务身份校验未通过",
@@ -278,6 +279,9 @@ func (s *Store) FinishRefundAttempt(ctx context.Context, j *RefundJob, d RefundD
 	}
 	// Read current settings, including changes made while an attempt was running.
 	if err = tx.QueryRow(ctx, "SELECT recovery,retry_seconds,mother_failover FROM refund_settings WHERE id").Scan(&j.Settings.Recovery, &j.Settings.RetrySeconds, &j.Settings.MotherFailover); err != nil {
+		return err
+	}
+	if err = recordInviteAuthorizationFailure(ctx, tx, j, step, d); err != nil {
 		return err
 	}
 	if handled, e := scheduleMotherFailover(ctx, tx, j, step, d); handled || e != nil {

@@ -153,10 +153,10 @@ onMounted(load);
   <section class="table-card">
    <div class="section-title"><div><h2>母号管理</h2><p>在此维护母号与对应资源，申请人只需提交自己的账号资料。</p></div><button class="button primary" :disabled="busy" @click="editMother()">录入母号</button></div>
    <div class="table-scroll"><table><thead><tr><th>母号</th><th>团队 / 席位</th><th>代理</th><th>校验 / 席位（剩余 / 总数）</th><th>状态</th><th>当前申请</th><th>操作</th></tr></thead><tbody>
-    <tr v-for="m in mothers" :key="m.id"><td><strong>{{m.name}}</strong><small class="block">{{m.email}}</small><small v-if="m.plan_type" class="block">{{m.plan_type}}</small></td><td>{{m.team_id}}<small class="block">{{m.seat_type==='default'?'标准席位':'高级席位（prolite）'}}</small><small v-if="m.token_expires_at" class="block">AT 到期：{{displayTime(m.token_expires_at)}}</small><small v-if="m.has_refresh" class="block">RT 已加密保存</small></td><td>{{proxies.find(p=>p.id===m.proxy_id)?.name||'专属代理不可用'}}</td><td><ResourceCheckSummary :check="m.check" mother/></td><td><span class="badge" :class="m.enabled?'green':'gray'">{{m.enabled?'启用':'停用'}}</span><small v-if="m.auth_blocked" class="block form-error">授权失效，暂停接单</small><small v-else-if="m.token_expires_at&amp;&amp;new Date(m.token_expires_at).getTime()&lt;=Date.now()" class="block form-error">凭证过期，暂停接单</small></td><td><button v-if="m.active_refund" class="link" @click="detail=m.active_refund">{{m.active_email}} · {{statuses[m.active_status||'']?.label||'处理中'}}</button><span v-else>空闲</span></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkMother(m)">校验 / 刷新席位</button><button class="button secondary" :disabled="busy" @click="editMother(m)">编辑</button><button class="button secondary danger" :disabled="busy||!!m.active_refund" @click="removing={kind:'mothers',id:m.id,name:m.name};modal='delete';formError=''">删除</button></div></td></tr>
+    <tr v-for="m in mothers" :key="m.id"><td><strong>{{m.name}}</strong><small class="block">{{m.email}}</small><small v-if="m.plan_type" class="block">{{m.plan_type}}</small></td><td>{{m.team_id}}<small class="block">{{m.seat_type==='default'?'标准席位':'高级席位（prolite）'}}</small><small v-if="m.token_expires_at" class="block">AT 到期：{{displayTime(m.token_expires_at)}}</small><small v-if="m.has_refresh" class="block">RT 已加密保存</small></td><td>{{proxies.find(p=>p.id===m.proxy_id)?.name||'专属代理不可用'}}</td><td><ResourceCheckSummary :check="m.check" mother/></td><td><span class="badge" :class="m.enabled?'green':'gray'">{{m.enabled?'启用':'停用'}}</span><small v-if="m.auth_blocked" class="block form-error">授权失效，暂停接单</small><small v-else-if="m.token_expires_at&amp;&amp;new Date(m.token_expires_at).getTime()&lt;=Date.now()" class="block form-error">凭证过期，暂停接单</small></td><td><button v-if="m.active_refund" class="link" @click="detail=m.active_refund">{{m.active_email}} · {{statuses[m.active_status||'']?.label||'处理中'}}</button><span v-else>空闲</span></td><td><div class="execution-actions"><button class="button secondary" :disabled="busy" @click="checkMother(m)">校验 / 刷新席位</button><button class="button secondary" :disabled="busy" @click="editMother(m)">编辑</button><button class="button secondary danger" :disabled="busy" @click="removing={kind:'mothers',id:m.id,name:m.name};modal='delete';formError=''">删除</button></div></td></tr>
     <tr v-if="!mothers.length"><td colspan="7" class="empty-state">请先录入网络出口，再录入母号资源。</td></tr>
    </tbody></table></div>
-   <p class="execution-footnote">需要协助的申请会保留资源占用，处理后才能办理后续申请。已产生历史记录的母号只能停用。</p>
+   <p class="execution-footnote">删除母号后立即从配置列表移除并停止分配新申请，历史服务记录保留，已开始的申请继续按原流程收尾。</p>
   </section>
   <section class="table-card">
    <div class="section-title"><div><h2>网络出口</h2><p>连接信息加密保管，列表只展示名称与可用状态。</p></div><button class="button primary" :disabled="busy" @click="editProxy()">录入代理</button></div>
@@ -191,7 +191,8 @@ onMounted(load);
     <ResourceCheckSummary v-if="proxyCheck" :check="proxyCheck"/>
     <label class="checkbox-label"><input v-model="proxy.enabled" type="checkbox"/>启用代理</label>
    </template>
-   <p v-else>确认删除“{{removing?.name}}”？有关联任务或母号的配置不能删除。</p>
+   <p v-else-if="removing?.kind==='mothers'">确认删除“{{removing.name}}”？删除后不再分配新申请，历史记录保留，已开始的申请继续收尾。</p>
+   <p v-else>确认删除“{{removing?.name}}”？仍被使用的代理配置不能删除。</p>
    <p v-if="formError" class="form-error" role="alert">{{formError}}</p>
    <footer class="modal-actions"><button type="button" class="button secondary" :disabled="busy||parsing" @click="close">取消</button><button class="button primary" :disabled="busy||parsing">{{busy?'处理中…':modal==='delete'?'确认删除':'保存'}}</button></footer>
   </form>

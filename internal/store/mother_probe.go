@@ -22,7 +22,7 @@ func (s *Store) PrepareMotherProbe(ctx context.Context, actor string, v RefundMo
 	if v.ID != "" {
 		var saved RefundMother
 		var secret []byte
-		err = tx.QueryRow(ctx, "SELECT email,team_id,proxy_id,secret FROM refund_mothers WHERE id=$1", v.ID).Scan(&saved.Email, &saved.TeamID, &saved.ProxyID, &secret)
+		err = tx.QueryRow(ctx, "SELECT email,team_id,proxy_id,secret FROM refund_mothers WHERE id=$1 AND deleted_at IS NULL", v.ID).Scan(&saved.Email, &saved.TeamID, &saved.ProxyID, &secret)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}

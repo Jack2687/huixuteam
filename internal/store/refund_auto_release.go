@@ -15,6 +15,8 @@ func motherFailure(d RefundDiagnostic) bool {
 	switch d.Code {
 	case "mother_preflight_auth", "mother_preflight_failed", "mother_network", "mother_shape", "mother_pagination":
 		return true
+	case "mother_invite_auth":
+		return d.HTTPStatus == 401 && d.Evidence != nil && d.Evidence.Side == "mother" && d.Evidence.Stage == "invite_send"
 	case "mother_http":
 		return d.HTTPStatus == 401 || d.HTTPStatus == 403 || d.HTTPStatus == 429 || d.HTTPStatus >= 500
 	case "fallback_unavailable":

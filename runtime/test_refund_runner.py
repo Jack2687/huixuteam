@@ -10,6 +10,29 @@ from manager_oauth import bridge
 
 
 class RunnerTests(unittest.TestCase):
+    def test_only_invite_post_401_has_invitation_authorization_code(self):
+        for method, path, status, expected, operation in [
+            ('POST', '/invites', 401, 'mother_invite_auth', 'invite_send'),
+            ('GET', '/invites?offset=0', 401, 'mother_http', 'invites_read'),
+            ('POST', '/invites', 403, 'mother_http', 'invite_send'),
+            ('DELETE', '/users/child', 401, 'mother_http', 'member_remove'),
+        ]:
+            with self.subTest(method=method, status=status), patch.object(runner.requests, 'Session'):
+                c=runner.MotherClient(self.job())
+                c.session.request.return_value=Mock(status_code=status, headers={}, text='{}', json=lambda: {})
+                with self.assertRaises(runner.UpstreamFailure) as failure:
+                    c.call(method,path)
+                self.assertEqual(failure.exception.code,expected)
+                self.assertEqual(failure.exception.operation,operation)
+        mother=Mock();login=Mock();steps=[]
+        mother.invite.side_effect=runner.UpstreamFailure('mother_invite_auth',401,operation='invite_send')
+        result=runner.execute(self.job(),lambda method,*a:steps.append(method),lambda _:mother,login)
+        self.assertEqual(result['code'],'mother_invite_auth')
+        self.assertEqual(result['evidence']['stage'],'invite_send')
+        self.assertEqual(result['evidence']['side'],'mother')
+        self.assertEqual([s for s in steps if s!='diagnostic'],['inviting'])
+        login.assert_not_called()
+
     def test_preflight_failure_never_invites_or_logs_in(self):
         mother=Mock();login=Mock();steps=[]
         mother.preflight.side_effect=runner.UpstreamFailure('mother_preflight_auth',401)

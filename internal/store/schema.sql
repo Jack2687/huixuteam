@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS refund_execution (
  lease_token TEXT NOT NULL DEFAULT '', lease_until TIMESTAMPTZ,
  released BOOLEAN NOT NULL DEFAULT false, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Removing a mother hides configuration without deleting historical execution
+-- references or credentials still needed by its reserved task to finish cleanup.
+ALTER TABLE refund_mothers ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE refund_mothers DROP CONSTRAINT IF EXISTS refund_mothers_email_key;
+ALTER TABLE refund_mothers DROP CONSTRAINT IF EXISTS refund_mothers_team_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS refund_mothers_active_email ON refund_mothers(email) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS refund_mothers_active_team ON refund_mothers(team_id) WHERE deleted_at IS NULL;
 -- Release a verified-clean mother independently of the unresolved service fee.
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS verification_only BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE refund_execution ADD COLUMN IF NOT EXISTS mother_released_at TIMESTAMPTZ;

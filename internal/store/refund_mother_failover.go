@@ -39,14 +39,6 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 			return true, err
 		}
 	}
-	var switches int
-	if err := tx.QueryRow(ctx, "SELECT mother_switch_count FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&switches); err != nil {
-		return true, err
-	}
-	cfg := j.Settings.MotherFailover
-	if cfg == nil || !cfg.Enabled || switches >= cfg.MaxSwitches {
-		return true, autoReleaseRefund(ctx, tx, j, step, d)
-	}
 	// A temporary outage must not exclude every configured mother forever.
 	// Keep the same switch budget and queue delay; prefer another free mother,
 	// but allow the original resource to be rechecked after the cooldown.
@@ -54,21 +46,34 @@ func scheduleMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step s
 		d.HTTPStatus == 500 || d.HTTPStatus == 502 || d.HTTPStatus == 503 || d.HTTPStatus == 504 ||
 		(d.HTTPStatus == 0 && (d.NetworkCode == 5 || d.NetworkCode == 6 || d.NetworkCode == 7 ||
 			d.NetworkCode == 28 || d.NetworkCode == 35 || d.NetworkCode == 52 || d.NetworkCode == 55 || d.NetworkCode == 56)))
+	return true, queueMotherFailover(ctx, tx, j, step, d, temporary)
+}
+
+// Callers must establish either untouched preflight or confirmed invitation cleanup.
+func queueMotherFailover(ctx context.Context, tx pgx.Tx, j *RefundJob, step string, d RefundDiagnostic, temporary bool) error {
+	var switches int
+	if err := tx.QueryRow(ctx, "SELECT mother_switch_count FROM refund_execution WHERE refund_id=$1", j.ID).Scan(&switches); err != nil {
+		return err
+	}
+	cfg := j.Settings.MotherFailover
+	if cfg == nil || !cfg.Enabled || switches >= cfg.MaxSwitches {
+		return autoReleaseRefund(ctx, tx, j, step, d)
+	}
 	delay := cfg.RetrySeconds
 	if temporary && d.Evidence != nil && d.Evidence.RetryAfterSeconds > delay {
 		delay = d.Evidence.RetryAfterSeconds
 	}
-	// This restricted transition is safe to cancel: no invite/login/submission was
-	// performed. Do not enable generic processing -> queued transitions elsewhere.
+	// No login/submission occurred, and any possible invitation is confirmed absent.
+	// Do not enable generic processing -> queued transitions elsewhere.
 	if _, err := tx.Exec(ctx, `UPDATE refunds SET status='queued',message=$2,updated_at=now() WHERE id=$1 AND fee_status='frozen'`, j.ID, publicRefundMessage("queued", "")); err != nil {
-		return true, err
+		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE refund_execution SET released=true,lease_token='',lease_until=NULL,recovery_mode='mother_switch',
+	if _, err := tx.Exec(ctx, `UPDATE refund_execution SET step='assigned',released=true,lease_token='',lease_until=NULL,recovery_mode='mother_switch',cleanup_count=0,
  next_attempt_at=now()+($2 * interval '1 second'),mother_switch_count=mother_switch_count+1,
  failed_mothers=CASE WHEN $4 THEN failed_mothers ELSE array_append(failed_mothers,$3) END,recovery_started_at=COALESCE(recovery_started_at,now()),updated_at=now()
  WHERE refund_id=$1 AND child_user_id='' AND accepted_at IS NULL`, j.ID, delay, j.MotherAttemptKey, temporary); err != nil {
-		return true, err
+		return err
 	}
 	_, err := tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'资源暂不可用，已重新排队等待调度。',true)", j.ID)
-	return true, err
+	return err
 }

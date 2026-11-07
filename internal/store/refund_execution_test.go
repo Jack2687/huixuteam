@@ -293,9 +293,6 @@ func TestSettingsSecretsImmutableReservationAndPermissions(t *testing.T) {
 	if _, err = s.SaveRefundMother(ctx, a.ID, m); err == nil {
 		t.Fatal("inflight team changed")
 	}
-	if err = s.DeleteRefundResource(ctx, a.ID, "mother", m.ID); err == nil {
-		t.Fatal("inflight mother deleted")
-	}
 	if err = legacyAttention(t, s, j); err != nil {
 		t.Fatal(err)
 	}

@@ -60,6 +60,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		request("GET", "/api/admin/refund-settings", "", cookie, 403)
 		request("PUT", "/api/admin/refund-settings", `{"mother_interval_seconds":30}`, cookie, 403)
 		request("POST", "/api/admin/refund-mothers", `{}`, cookie, 403)
+		request("DELETE", "/api/admin/refund-mothers/fake", "", cookie, 403)
 		request("POST", "/api/admin/refund-mothers/preview", `{"session":"private"}`, cookie, 403)
 		request("POST", "/api/admin/refund-mothers/check", `{}`, cookie, 403)
 		request("POST", "/api/admin/refund-proxies", `{}`, cookie, 403)
@@ -67,6 +68,7 @@ func TestExecutionHTTPPermissionsAndSecretPrivacy(t *testing.T) {
 		request("POST", "/api/admin/refunds/fake/resume", `{"action":"resume","note":"test reason"}`, cookie, 403)
 	}
 	request("GET", "/api/admin/refund-settings", "", "", 401)
+	request("DELETE", "/api/admin/refund-mothers/fake", "", "", 401)
 	raw := request("POST", "/api/admin/refund-proxies", `{"name":"HTTP fixture","url":"proxy.invalid:8080:user:proxy-secret","enabled":true}`, ad, 200)
 	var created struct {
 		ID string `json:"id"`

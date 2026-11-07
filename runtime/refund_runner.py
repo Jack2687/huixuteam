@@ -26,9 +26,10 @@ class NeedsVerification(Exception):
 
 
 class UpstreamFailure(Exception):
-    def __init__(self, code, status=0, network_code=0, retry_after_seconds=0):
+    def __init__(self, code, status=0, network_code=0, retry_after_seconds=0, operation=""):
         self.code, self.status, self.network_code = code, status, network_code
         self.retry_after_seconds = retry_after_seconds
+        self.operation = operation
 
 
 def rpc(method, params=None, **kwargs):
@@ -150,7 +151,8 @@ class MotherClient:
             raise UpstreamFailure("mother_network", network_code=getattr(exc,"code",0)) from None
         diagnostics.request_event(operation, "response", side="mother", response=response, started=started)
         if not 200 <= response.status_code < 300:
-            raise UpstreamFailure("mother_http", response.status_code, retry_after_seconds=parse_retry_after(response.headers))
+            code = "mother_invite_auth" if operation == "invite_send" and response.status_code == 401 else "mother_http"
+            raise UpstreamFailure(code, response.status_code, retry_after_seconds=parse_retry_after(response.headers), operation=operation)
         return response
 
     def find(self, collection):
@@ -395,7 +397,7 @@ def _execute(job, checkpoint, mother_factory, login_factory, sleep):
     except StopProtocol:
         return {"ok": False, "code": "checkpoint_declined"}
     except UpstreamFailure as exc:
-        detail = diagnostics.failure(exc, "mother_operation", side="mother")
+        detail = diagnostics.failure(exc, exc.operation or "mother_operation", side="mother")
         return {"ok": False, "code": exc.code, "http_status": exc.status,
                 "evidence": detail["evidence"],
                 **({"network_code": exc.network_code, "retryable": exc.code in {"mother_network", "cleanup_pending"} or exc.status in {408, 429, 500, 502, 503, 504}} if recovery else {})}

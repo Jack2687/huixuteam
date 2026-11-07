@@ -117,11 +117,11 @@ func (s *Store) ClaimRefund(ctx context.Context) (*RefundJob, error) {
  FROM refunds r JOIN users u ON u.id=r.user_id LEFT JOIN refund_execution e ON e.refund_id=r.id
  JOIN LATERAL (
   SELECT m.id FROM refund_mothers m JOIN refund_proxies p ON p.id=m.proxy_id
-  WHERE m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now())
+  WHERE m.deleted_at IS NULL AND m.enabled AND p.enabled AND (m.token_expires_at IS NULL OR m.token_expires_at>now())
   AND (m.auth_failed_fingerprint IS NULL OR m.auth_failed_fingerprint<>md5(m.secret))
   AND NOT ((m.id||':'||md5(m.secret)||':'||md5(p.secret))=ANY(COALESCE(e.failed_mothers,'{}'::text[])))
-  AND NOT EXISTS(SELECT 1 FROM refund_execution busy WHERE busy.mother_id=m.id AND NOT busy.released AND busy.mother_released_at IS NULL)
-  AND NOT EXISTS(SELECT 1 FROM refund_execution done WHERE done.mother_id=m.id AND COALESCE(done.mother_released_at,done.completed_at)>now()-($1 * interval '1 second'))
+  AND NOT EXISTS(SELECT 1 FROM refund_execution busy JOIN refund_mothers previous ON previous.id=busy.mother_id WHERE previous.team_id=m.team_id AND NOT busy.released AND busy.mother_released_at IS NULL)
+  AND NOT EXISTS(SELECT 1 FROM refund_execution done JOIN refund_mothers previous ON previous.id=done.mother_id WHERE previous.team_id=m.team_id AND COALESCE(done.mother_released_at,done.completed_at)>now()-($1 * interval '1 second'))
   ORDER BY CASE WHEN e.recovery_mode='mother_switch' AND m.id=e.mother_id THEN 1 ELSE 0 END,m.updated_at,m.id LIMIT 1
  ) m ON true
  WHERE r.status='queued' AND NOT u.disabled
@@ -322,6 +322,12 @@ func (s *Store) RefundCheckpoint(ctx context.Context, j *RefundJob, c Checkpoint
 		}
 		if _, err = tx.Exec(ctx, "INSERT INTO refund_events(refund_id,message,internal) VALUES($1,'本次资源已确认清理。',true)", j.ID); err != nil {
 			return err
+		}
+		if handled, e := finishInviteAuthorizationCleanup(ctx, tx, j, step); handled || e != nil {
+			if e != nil {
+				return e
+			}
+			return tx.Commit(ctx)
 		}
 		message = "本次服务未完成，冻结服务费已释放。"
 		if terminalCode == "password_verification_failed" {
